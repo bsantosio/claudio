@@ -88,12 +88,12 @@ func TestConnect_ClaudeCode_CreatesEntry(t *testing.T) {
 		t.Fatalf("Connect(claude-code): %v", err)
 	}
 
-	path := filepath.Join(dir, "claude-code.json")
-	cfg := readJSON(t, path)
-
-	servers, ok := cfg["mcpServers"].(map[string]any)
+	// Verify plugin .mcp.json was created
+	mcpPath := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code", ".mcp.json")
+	mcpCfg := readJSON(t, mcpPath)
+	servers, ok := mcpCfg["mcpServers"].(map[string]any)
 	if !ok {
-		t.Fatalf("mcpServers not a map, got %T", cfg["mcpServers"])
+		t.Fatalf("mcpServers not a map in .mcp.json, got %T", mcpCfg["mcpServers"])
 	}
 	claudio, ok := servers["claudio"].(map[string]any)
 	if !ok {
@@ -101,6 +101,24 @@ func TestConnect_ClaudeCode_CreatesEntry(t *testing.T) {
 	}
 	if claudio["args"] == nil {
 		t.Error("mcpServers.claudio.args should be set")
+	}
+
+	// Verify plugin.json was created
+	pluginPath := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code", ".claude-plugin", "plugin.json")
+	pluginCfg := readJSON(t, pluginPath)
+	if pluginCfg["name"] != "claudio" {
+		t.Errorf("plugin.json name = %v, want claudio", pluginCfg["name"])
+	}
+
+	// Verify enabledPlugins in settings.json
+	settingsPath := filepath.Join(dir, "claude-code.json")
+	settings := readJSON(t, settingsPath)
+	enabled, ok := settings["enabledPlugins"].(map[string]any)
+	if !ok {
+		t.Fatal("enabledPlugins not in settings.json")
+	}
+	if enabled["claudio@claudio"] != true {
+		t.Error("claudio@claudio should be enabled in settings.json")
 	}
 }
 
@@ -169,9 +187,10 @@ func TestConnect_PreservesExistingKeys(t *testing.T) {
 		t.Error("other-server entry should be preserved")
 	}
 
-	// New claudio entry present.
-	if _, ok := servers["claudio"]; !ok {
-		t.Error("claudio entry should have been added")
+	// enabledPlugins entry present.
+	enabled, _ := cfg["enabledPlugins"].(map[string]any)
+	if enabled["claudio@claudio"] != true {
+		t.Error("claudio@claudio should be in enabledPlugins")
 	}
 }
 
@@ -251,8 +270,12 @@ func TestDisconnect_InvalidTarget_ReturnsError(t *testing.T) {
 
 func TestStatus_Connected_ReturnsTrue(t *testing.T) {
 	dir := setConfigOverride(t)
-	path := filepath.Join(dir, "claude-code.json")
-	writeJSON(t, path, map[string]any{
+	// Claude Code status checks for plugin .mcp.json file
+	pluginDir := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(pluginDir, ".mcp.json"), map[string]any{
 		"mcpServers": map[string]any{
 			"claudio": map[string]any{"command": "/bin/claudio", "args": []any{"mcp"}},
 		},
@@ -263,7 +286,7 @@ func TestStatus_Connected_ReturnsTrue(t *testing.T) {
 		t.Fatalf("Status: %v", err)
 	}
 	if !connected {
-		t.Error("expected Status to return true when claudio entry exists")
+		t.Error("expected Status to return true when plugin .mcp.json exists")
 	}
 }
 
@@ -306,9 +329,12 @@ func TestStatus_InvalidTarget_ReturnsError(t *testing.T) {
 func TestStatusAll_ReturnsBothTargets(t *testing.T) {
 	dir := setConfigOverride(t)
 
-	// Connect claude-code only.
-	path := filepath.Join(dir, "claude-code.json")
-	writeJSON(t, path, map[string]any{
+	// Create Claude Code plugin structure
+	pluginDir := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(pluginDir, ".mcp.json"), map[string]any{
 		"mcpServers": map[string]any{
 			"claudio": map[string]any{"command": "/bin/claudio", "args": []any{"mcp"}},
 		},
