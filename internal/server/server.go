@@ -9,6 +9,7 @@ import (
 	"claudio/internal/claude"
 	"claudio/internal/domain"
 	"claudio/internal/store"
+	"claudio/internal/webui"
 )
 
 func CheckClaudeAuth() (authStatus string, versionStr string) {
@@ -53,7 +54,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func apiKeyMiddleware(apiKey string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
+		if r.URL.Path == "/health" || r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/web/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -89,6 +90,7 @@ func BuildMux(cfg domain.Config, st *store.Store) http.Handler {
 
 func BuildMuxWithRunner(cfg domain.Config, st *store.Store, runner claude.Runner) http.Handler {
 	mux := http.NewServeMux()
+	webui.RegisterHandler(mux)
 	mux.HandleFunc("GET /health", healthHandler)
 	if st != nil {
 		RegisterAgentHandlers(mux, cfg, st)

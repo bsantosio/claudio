@@ -9,6 +9,7 @@ import (
 	"claudio/internal/store"
 )
 
+
 func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Store) {
 	mux.HandleFunc("POST /agents", func(w http.ResponseWriter, r *http.Request) {
 		var input domain.Agent
@@ -72,6 +73,36 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 			} else {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 			}
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Task 2.3 — Install agent: copies definition to .claude/agents/.
+	mux.HandleFunc("POST /agents/{id}/install", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		a, ok := st.GetAgent(id)
+		if !ok {
+			WriteError(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		if err := domain.InstallAgent(a, cfg.WorkDir); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "installed"})
+	})
+
+	// Task 2.4 — Uninstall agent: removes definition from .claude/agents/.
+	mux.HandleFunc("DELETE /agents/{id}/install", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		a, ok := st.GetAgent(id)
+		if !ok {
+			WriteError(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		if err := domain.UninstallAgent(a, cfg.WorkDir); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

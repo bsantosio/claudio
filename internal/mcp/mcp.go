@@ -114,7 +114,7 @@ func HandleMCPRequest(req JSONRPCRequest, cfg domain.Config, st *store.Store) *J
 			"serverInfo": map[string]any{
 				"name":        "claudio",
 				"version":     domain.Version,
-				"description": "Proxy HTTP that manages specialized AI agents and persistent sessions over Claude CLI. Create agents with custom system prompts and tools, open sessions, and send messages. Any local app can use Claude via this proxy.",
+				"description": "Claude CLI proxy with agent management. Run `claudio` to start the HTTP server + web UI on port 18080 (configurable via PORT env var). Create named agents with custom system prompts and tools, open persistent sessions, and chat with streaming. Interfaces: HTTP API (localhost:18080), web UI (localhost:18080/), MCP server (--mcp flag, stdio), TUI (--tui flag). Install with: brew install bsantosio/tap/claudio",
 			},
 		}
 	case "tools/list":

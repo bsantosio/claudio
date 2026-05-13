@@ -18,6 +18,7 @@ var menuItems = []struct {
 	{"Agents", "Manage specialized agents"},
 	{"Sessions", "View and manage sessions"},
 	{"Install Agent", "Export agent to Claude Code"},
+	{"API Service", ""},
 	{"Quit", ""},
 }
 
@@ -60,6 +61,11 @@ func (m Model) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = ""
 				return m, nil
 			case 4:
+				if m.serviceRunning {
+					return m, uninstallServiceCmd()
+				}
+				return m, installServiceCmd(m.cfg.Port)
+			case 5:
 				return m, tea.Quit
 			}
 		}
@@ -177,7 +183,7 @@ func (m Model) updateNewAgentPrompt(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.newAgentPrompt = prompt
 			m.screen = screenNewAgentModel
-			m.items = []string{"sonnet", "haiku", "opus"}
+			m.items = []string{"sonnet", "opus", "haiku", "claude-opus-4-6[1m]"}
 			m.cursor = 0
 			m.status = ""
 			return m, nil

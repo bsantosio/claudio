@@ -54,11 +54,29 @@ func (m Model) renderList(items []string, cursor int) string {
 func (m Model) renderMenu() string {
 	var sb strings.Builder
 	sb.WriteString(m.renderHeader("Claude CLI Proxy & Agent"))
+
+	// Service status banner
+	if m.serviceRunning {
+		sb.WriteString(successStyle.Render("  ● API running") + dimStyle.Render(fmt.Sprintf("  http://localhost:%s  (PID %s)", m.cfg.Port, m.servicePID)) + "\n\n")
+	} else {
+		sb.WriteString(dimStyle.Render("  ○ API not running") + "\n\n")
+	}
+
 	for i, item := range menuItems {
 		label := item.label
 		desc := ""
 		if item.desc != "" {
 			desc = dimStyle.Render("  " + item.desc)
+		}
+		// Dynamic label for API Service
+		if i == 4 {
+			if m.serviceRunning {
+				label = "Stop API Service"
+				desc = dimStyle.Render("  Stop background service")
+			} else {
+				label = "Start API Service"
+				desc = dimStyle.Render("  Run API in background (auto-start at login)")
+			}
 		}
 		if i == m.cursor {
 			sb.WriteString(cursorStyle.Render("  ▸ "+label) + desc + "\n")

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"claudio/internal/service"
 
 	"claudio/internal/claude"
 	"claudio/internal/domain"
@@ -158,5 +159,32 @@ func uninstallAgentCmd(agent *domain.Agent, workDir string) tea.Cmd {
 	return func() tea.Msg {
 		err := domain.UninstallAgent(agent, workDir)
 		return installDoneMsg{installed: false, err: err}
+	}
+}
+
+func checkServiceCmd() tea.Cmd {
+	return func() tea.Msg {
+		running, pid, _ := service.Status()
+		return serviceStatusMsg{running: running, pid: pid}
+	}
+}
+
+func installServiceCmd(port string) tea.Cmd {
+	return func() tea.Msg {
+		err := service.Install(port)
+		if err == nil {
+			time.Sleep(2 * time.Second)
+		}
+		return serviceActionMsg{action: "installed", err: err}
+	}
+}
+
+func uninstallServiceCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := service.Uninstall()
+		if err == nil {
+			time.Sleep(500 * time.Millisecond)
+		}
+		return serviceActionMsg{action: "removed", err: err}
 	}
 }

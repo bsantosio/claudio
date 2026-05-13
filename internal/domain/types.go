@@ -36,12 +36,15 @@ type Agent struct {
 var ErrHasActiveSessions = errors.New("agent has active sessions")
 
 var KnownModels = map[string]bool{
-	"haiku":             true,
-	"sonnet":            true,
-	"opus":              true,
-	"claude-haiku-4-5":  true,
-	"claude-sonnet-4-6": true,
-	"claude-opus-4-5":   true,
+	"haiku":                    true,
+	"sonnet":                   true,
+	"opus":                     true,
+	"claude-haiku-4-5":         true,
+	"claude-haiku-4-5-20251001": true,
+	"claude-sonnet-4-6":        true,
+	"claude-opus-4-6":          true,
+	"claude-opus-4-6[1m]":      true,
+	"claude-opus-4-7":          true,
 }
 
 type Session struct {

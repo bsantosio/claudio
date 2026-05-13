@@ -74,8 +74,8 @@ type ModelObject struct {
 }
 
 var modelAliasMap = map[string]string{
-	"gpt-4":         "claude-opus-4-5",
-	"gpt-4-turbo":   "claude-opus-4-5",
+	"gpt-4":         "claude-opus-4-7",
+	"gpt-4-turbo":   "claude-opus-4-7",
 	"gpt-4o":        "claude-sonnet-4-6",
 	"gpt-3.5-turbo": "claude-haiku-4-5",
 	"gpt-3.5":       "claude-haiku-4-5",
@@ -91,7 +91,9 @@ func NormalizeModel(m string) string {
 var knownClaudeModels = []ModelObject{
 	{ID: "claude-haiku-4-5", Object: "model", Created: 1714000000, OwnedBy: "anthropic"},
 	{ID: "claude-sonnet-4-6", Object: "model", Created: 1714000001, OwnedBy: "anthropic"},
-	{ID: "claude-opus-4-5", Object: "model", Created: 1714000002, OwnedBy: "anthropic"},
+	{ID: "claude-opus-4-6", Object: "model", Created: 1714000002, OwnedBy: "anthropic"},
+	{ID: "claude-opus-4-6[1m]", Object: "model", Created: 1714000003, OwnedBy: "anthropic"},
+	{ID: "claude-opus-4-7", Object: "model", Created: 1714000004, OwnedBy: "anthropic"},
 }
 
 func modelsHandler(w http.ResponseWriter, r *http.Request) {

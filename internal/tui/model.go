@@ -72,6 +72,16 @@ type installDoneMsg struct {
 	err       error
 }
 
+type serviceStatusMsg struct {
+	running bool
+	pid     string
+}
+
+type serviceActionMsg struct {
+	action string
+	err    error
+}
+
 type sessionWithAgent struct {
 	sess      *domain.Session
 	agentName string
@@ -111,6 +121,9 @@ type Model struct {
 
 	quickChat bool
 
+	serviceRunning bool
+	servicePID     string
+
 	viewport viewport.Model
 
 	width, height int
@@ -137,7 +150,7 @@ func NewModel(cfg domain.Config, st *store.Store) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return loadAgentsCmd(m.store)
+	return tea.Batch(loadAgentsCmd(m.store), checkServiceCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -233,6 +246,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "session deleted"
 		m.statusErr = false
 		return m, nil
+	case serviceStatusMsg:
+		m.serviceRunning = msg.running
+		m.servicePID = msg.pid
+		return m, nil
+	case serviceActionMsg:
+		if msg.err != nil {
+			m.status = "service error: " + msg.err.Error()
+			m.statusErr = true
+		} else {
+			m.status = "service " + msg.action
+			m.statusErr = false
+		}
+		return m, checkServiceCmd()
 	case installDoneMsg:
 		if msg.err != nil {
 			m.status = "error: " + msg.err.Error()

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>claudio</title>
+  <link rel="stylesheet" href="/web/style.css" />
+</head>
+<body>
+  <!-- API key modal — shown when no key is stored -->
+  <div id="key-modal" class="modal hidden">
+    <div class="modal-box">
+      <h2>API Key Required</h2>
+      <p>Enter your claudio API key to continue.</p>
+      <input id="key-input" type="password" placeholder="Bearer token…" autocomplete="off" />
+      <button id="key-save">Save</button>
+    </div>
+  </div>
+
+  <header>
+    <span class="logo">claudio</span>
+    <nav>
+      <a href="#agents">Agents</a>
+      <a href="#sessions">Sessions</a>
+    </nav>
+    <button id="key-btn" title="Set API key">key</button>
+  </header>
+
+  <main id="app">
+    <!-- screens are rendered here by app.js -->
+  </main>
+
+  <script src="/web/app.js"></script>
+</body>
+</html>

@@ -498,8 +498,8 @@ func TestMessageHandler_EmptyContent(t *testing.T) {
 
 func TestNormalizeModel_GPT4MapsToOpus(t *testing.T) {
 	result := server.NormalizeModel("gpt-4")
-	if result != "claude-opus-4-5" {
-		t.Errorf("expected 'claude-opus-4-5', got %q", result)
+	if result != "claude-opus-4-7" {
+		t.Errorf("expected 'claude-opus-4-7', got %q", result)
 	}
 }
 
@@ -665,7 +665,7 @@ func TestIntegration_OpenAI_WithAgentId(t *testing.T) {
 	cfg := domain.Config{DefaultModel: "sonnet", WorkDir: t.TempDir(), DataDir: t.TempDir()}
 	st, _ := store.NewStore(":memory:")
 	defer st.Close()
-	agent, _ := st.CreateAgent(domain.Agent{Name: "specialized", SystemPrompt: "You are a specialized expert.", Model: "claude-opus-4-5"}, "sonnet")
+	agent, _ := st.CreateAgent(domain.Agent{Name: "specialized", SystemPrompt: "You are a specialized expert.", Model: "claude-opus-4-7"}, "sonnet")
 	var capturedSystemPrompt string
 	mockRunner := func(ctx context.Context, cfg domain.Config, a *domain.Agent, sessionID string, message string, resume bool, onEvent claude.StreamCallback) error {
 		capturedSystemPrompt = a.SystemPrompt
@@ -688,6 +688,148 @@ func TestIntegration_OpenAI_WithAgentId(t *testing.T) {
 	}
 	if capturedSystemPrompt != "You are a specialized expert." {
 		t.Errorf("expected agent system prompt, got %q", capturedSystemPrompt)
+	}
+}
+
+// --- Auth middleware bypass tests for web UI paths (Tasks 3.4, 3.5, 3.6) ---
+
+// Task 3.4 — GET / without API key → not 401 (web UI root bypass)
+func TestAPIKeyMiddleware_RootBypass(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.APIKey = "secret"
+	h, _ := newTestServer(t, cfg)
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("expected / to bypass auth (not 401), got %d", w.Code)
+	}
+}
+
+// Task 3.5 — GET /web/app.js without API key → not 401 (static asset bypass)
+func TestAPIKeyMiddleware_WebPrefixBypass(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.APIKey = "secret"
+	h, _ := newTestServer(t, cfg)
+	req := httptest.NewRequest("GET", "/web/app.js", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("expected /web/app.js to bypass auth (not 401), got %d", w.Code)
+	}
+}
+
+// Triangulate — GET /web/style.css without API key → not 401
+func TestAPIKeyMiddleware_WebPrefixBypass_StyleCSS(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.APIKey = "secret"
+	h, _ := newTestServer(t, cfg)
+	req := httptest.NewRequest("GET", "/web/style.css", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("expected /web/style.css to bypass auth (not 401), got %d", w.Code)
+	}
+}
+
+// Task 3.6 — POST /agents/{id}/install without API key → 401
+func TestAPIKeyMiddleware_InstallEndpointRequiresKey(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.APIKey = "secret"
+	h, _ := newTestServer(t, cfg)
+	req := httptest.NewRequest("POST", "/agents/some-id/install", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for install without key, got %d", w.Code)
+	}
+}
+
+// --- Install / Uninstall endpoint tests (Tasks 3.7, 3.8) ---
+
+func newTestServerWithKey(t *testing.T, cfg domain.Config) (http.Handler, *store.Store) {
+	t.Helper()
+	st, err := store.NewStore(":memory:")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h := server.BuildMux(cfg, st)
+	return h, st
+}
+
+func postWithKey(t *testing.T, h http.Handler, path, apiKey string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", path, nil)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+func deleteWithKey(t *testing.T, h http.Handler, path, apiKey string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("DELETE", path, nil)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// Task 3.7a — POST /agents/{id}/install with valid agent → 200
+func TestInstallAgent_KnownAgent_Returns200(t *testing.T) {
+	cfg := newTestConfig(t)
+	h, st := newTestServerWithKey(t, cfg)
+	agent, _ := st.CreateAgent(domain.Agent{Name: "my-agent", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+
+	w := postWithKey(t, h, "/agents/"+agent.ID+"/install", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for install of known agent, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// Task 3.7b — POST /agents/{id}/install with unknown agent → 404
+func TestInstallAgent_UnknownAgent_Returns404(t *testing.T) {
+	cfg := newTestConfig(t)
+	h, _ := newTestServerWithKey(t, cfg)
+
+	w := postWithKey(t, h, "/agents/does-not-exist/install", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for install of unknown agent, got %d", w.Code)
+	}
+}
+
+// Task 3.8a — DELETE /agents/{id}/install with known agent → 204
+func TestUninstallAgent_InstalledAgent_Returns204(t *testing.T) {
+	cfg := newTestConfig(t)
+	h, st := newTestServerWithKey(t, cfg)
+	agent, _ := st.CreateAgent(domain.Agent{Name: "my-agent", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+
+	// Install first
+	domain.InstallAgent(agent, cfg.WorkDir)
+
+	w := deleteWithKey(t, h, "/agents/"+agent.ID+"/install", "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for uninstall, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// Task 3.8b — DELETE /agents/{id}/install with unknown agent → 404
+func TestUninstallAgent_NotInstalled_Returns404(t *testing.T) {
+	cfg := newTestConfig(t)
+	h, _ := newTestServerWithKey(t, cfg)
+
+	w := deleteWithKey(t, h, "/agents/does-not-exist/install", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for uninstall of unknown agent, got %d", w.Code)
 	}
 }
 
