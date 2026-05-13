@@ -132,6 +132,7 @@ func BuildMuxWithRunner(cfg domain.Config, st *store.Store, runner claude.Runner
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /api/prompt", promptHandler)
 	mux.HandleFunc("GET /api/templates", templatesHandler)
+	registerConnectHandlers(mux)
 	if st != nil {
 		s.registerAgentHandlers(mux)
 		s.registerSessionHandlers(mux)

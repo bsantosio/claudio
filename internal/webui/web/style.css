@@ -305,6 +305,7 @@ header nav a:hover { color: var(--text); }
   border: 1px solid var(--border);
 }
 .badge.green { color: var(--accent2); border-color: var(--accent2); }
+.badge-ok { background: var(--accent2); color: #000; border-color: var(--accent2); }
 
 /* ── form hint ── */
 

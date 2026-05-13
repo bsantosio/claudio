@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"claudio/internal/claude"
+	"claudio/internal/connect"
 	"claudio/internal/domain"
 	"claudio/internal/service"
 	"claudio/internal/store"
@@ -229,5 +230,29 @@ func uninstallServiceCmd() tea.Cmd {
 			time.Sleep(500 * time.Millisecond)
 		}
 		return serviceActionMsg{action: "removed", err: err}
+	}
+}
+
+func checkConnectStatusCmd() tea.Cmd {
+	return func() tea.Msg {
+		status := connect.StatusAll()
+		return connectStatusMsg{
+			claudeCode:    status[connect.TargetClaudeCode],
+			claudeDesktop: status[connect.TargetClaudeDesktop],
+		}
+	}
+}
+
+func connectCmd(target string) tea.Cmd {
+	return func() tea.Msg {
+		err := connect.Connect(target)
+		return connectActionMsg{target: target, action: "connected", err: err}
+	}
+}
+
+func disconnectCmd(target string) tea.Cmd {
+	return func() tea.Msg {
+		err := connect.Disconnect(target)
+		return connectActionMsg{target: target, action: "disconnected", err: err}
 	}
 }

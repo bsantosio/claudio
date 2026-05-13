@@ -34,14 +34,19 @@ func printUsage() {
 	fmt.Print(`claudio — Claude CLI proxy with agent management
 
 Usage:
-  claudio                    Interactive TUI (default)
-  claudio web                Start web UI + open browser
-  claudio mcp                Start MCP server over stdio
-  claudio prompt             Print AI-ready usage prompt (+ copy to clipboard)
-  claudio service install    Install background service (auto-start at login)
-  claudio service uninstall  Remove background service
-  claudio service status     Check service status
-  claudio version            Print version
+  claudio                        Interactive TUI (default)
+  claudio web                    Start web UI + open browser
+  claudio mcp                    Start MCP server over stdio
+  claudio prompt                 Print AI-ready usage prompt (+ copy to clipboard)
+  claudio connect claude-code    Register claudio as MCP server in Claude Code
+  claudio connect claude-desktop Register claudio as MCP server in Claude Desktop
+  claudio connect status         Show MCP connection status for all targets
+  claudio disconnect claude-code    Remove claudio MCP server from Claude Code
+  claudio disconnect claude-desktop Remove claudio MCP server from Claude Desktop
+  claudio service install        Install background service (auto-start at login)
+  claudio service uninstall      Remove background service
+  claudio service status         Check service status
+  claudio version                Print version
 
 Environment:
   PORT               HTTP port (default: 18080)

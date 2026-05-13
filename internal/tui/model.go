@@ -29,6 +29,7 @@ const (
 	screenInstallPicker
 	screenInstallConfirm
 	screenQuickModel
+	screenConnect
 )
 
 type Model struct {
@@ -71,6 +72,10 @@ type Model struct {
 	serviceRunning bool
 	servicePID     string
 
+	// connect
+	connectClaudeCode    bool
+	connectClaudeDesktop bool
+
 	// viewport
 	viewport viewport.Model
 
@@ -103,7 +108,7 @@ func NewModel(cfg domain.Config, st *store.Store) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadAgentsCmd(m.store), checkServiceCmd())
+	return tea.Batch(loadAgentsCmd(m.store), checkServiceCmd(), checkConnectStatusCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -228,6 +233,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.screen = screenMenu
 		return m, nil
+	case connectStatusMsg:
+		m.connectClaudeCode = msg.claudeCode
+		m.connectClaudeDesktop = msg.claudeDesktop
+		return m, nil
+	case connectActionMsg:
+		if msg.err != nil {
+			m.status = "error: " + msg.err.Error()
+			m.statusErr = true
+		} else {
+			m.status = msg.target + " " + msg.action
+			m.statusErr = false
+		}
+		return m, checkConnectStatusCmd()
 	case spinner.TickMsg:
 		if m.waiting {
 			var cmd tea.Cmd
@@ -264,6 +282,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateInstallConfirm(msg)
 	case screenQuickModel:
 		return m.updateQuickModel(msg)
+	case screenConnect:
+		return m.updateConnect(msg)
 	}
 	return m, nil
 }
@@ -296,6 +316,8 @@ func (m Model) View() string {
 		return m.renderInstallConfirm()
 	case screenQuickModel:
 		return m.renderQuickModel()
+	case screenConnect:
+		return m.renderConnect()
 	}
 	return ""
 }

@@ -66,3 +66,14 @@ type sessionWithAgent struct {
 type allSessionsLoadedMsg struct {
 	sessions []sessionWithAgent
 }
+
+type connectStatusMsg struct {
+	claudeCode    bool
+	claudeDesktop bool
+}
+
+type connectActionMsg struct {
+	target string
+	action string // "connected" or "disconnected"
+	err    error
+}

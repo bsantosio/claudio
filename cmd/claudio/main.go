@@ -16,6 +16,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"claudio/internal/connect"
 	"claudio/internal/domain"
 	"claudio/internal/mcp"
 	"claudio/internal/server"
@@ -108,6 +109,10 @@ func main() {
 		cmdPrompt()
 	case "service":
 		cmdService()
+	case "connect":
+		cmdConnect()
+	case "disconnect":
+		cmdDisconnect()
 	case "version":
 		fmt.Printf("claudio %s\n", domain.Version)
 	case "help", "--help", "-h":
@@ -182,6 +187,59 @@ func cmdMCP() {
 	log.Printf("claudio v%s — MCP server (stdio)", domain.Version)
 	if err := mcp.RunMCPServer(cfg, st, os.Stdin, os.Stdout); err != nil {
 		log.Fatalf("mcp server error: %v", err)
+	}
+}
+
+func cmdConnect() {
+	target := ""
+	if len(os.Args) > 2 {
+		target = os.Args[2]
+	}
+	switch target {
+	case "status":
+		all := connect.StatusAll()
+		for _, t := range []string{connect.TargetClaudeCode, connect.TargetClaudeDesktop} {
+			state := "disconnected"
+			if all[t] {
+				state = "connected"
+			}
+			fmt.Printf("%-18s  %s\n", t, state)
+		}
+	case connect.TargetClaudeCode, connect.TargetClaudeDesktop:
+		if err := connect.Connect(target); err != nil {
+			log.Fatalf("connect failed: %v", err)
+		}
+		fmt.Printf("claudio connected to %s\n", target)
+		if target == connect.TargetClaudeDesktop {
+			fmt.Println("Note: restart Claude Desktop to apply changes.")
+		}
+	default:
+		if target != "" {
+			log.Fatalf("unknown target %q: use claude-code or claude-desktop", target)
+		}
+		fmt.Print("Usage:\n  claudio connect claude-code\n  claudio connect claude-desktop\n  claudio connect status\n")
+	}
+}
+
+func cmdDisconnect() {
+	target := ""
+	if len(os.Args) > 2 {
+		target = os.Args[2]
+	}
+	switch target {
+	case connect.TargetClaudeCode, connect.TargetClaudeDesktop:
+		if err := connect.Disconnect(target); err != nil {
+			log.Fatalf("disconnect failed: %v", err)
+		}
+		fmt.Printf("claudio disconnected from %s\n", target)
+		if target == connect.TargetClaudeDesktop {
+			fmt.Println("Note: restart Claude Desktop to apply changes.")
+		}
+	default:
+		if target != "" {
+			log.Fatalf("unknown target %q: use claude-code or claude-desktop", target)
+		}
+		fmt.Print("Usage:\n  claudio disconnect claude-code\n  claudio disconnect claude-desktop\n")
 	}
 }
 

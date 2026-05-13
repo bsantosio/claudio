@@ -68,8 +68,8 @@ func (m Model) renderMenu() string {
 		if item.desc != "" {
 			desc = dimStyle.Render("  " + item.desc)
 		}
-		// Dynamic label for API Service
-		if i == 4 {
+		// Dynamic label for API Service (now at index 5)
+		if i == 5 {
 			if m.serviceRunning {
 				label = "Stop API Service"
 				desc = dimStyle.Render("  Stop background service")
@@ -291,5 +291,38 @@ func (m Model) renderInstallConfirm() string {
 	target := filepath.Join(m.cfg.WorkDir, ".claude", "agents", domain.SanitizeName(agentName)+".md")
 	sb.WriteString(normalStyle.Render(fmt.Sprintf("  Target: %s", target)) + "\n\n")
 	sb.WriteString(m.renderFooter("y: install  u: uninstall  n/esc: cancel"))
+	return sb.String()
+}
+
+func (m Model) renderConnect() string {
+	var sb strings.Builder
+	sb.WriteString(m.renderHeader("MCP Connections"))
+	sb.WriteString(dimStyle.Render("  Connect claudio to Claude Code or Claude Desktop as an MCP server.") + "\n\n")
+
+	type targetRow struct {
+		label     string
+		connected bool
+		selected  bool
+	}
+	rows := []targetRow{
+		{"Claude Code", m.connectClaudeCode, m.cursor == 0},
+		{"Claude Desktop", m.connectClaudeDesktop, m.cursor == 1},
+	}
+
+	for _, row := range rows {
+		statusBadge := dimStyle.Render("[Not Connected]")
+		if row.connected {
+			statusBadge = successStyle.Render("[Connected]")
+		}
+		line := fmt.Sprintf("  %-16s  %s", row.label, statusBadge)
+		if row.selected {
+			sb.WriteString(cursorStyle.Render("▸"+line[1:]) + "\n")
+		} else {
+			sb.WriteString(normalStyle.Render(line) + "\n")
+		}
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(m.renderFooter("j/k: navigate  c: connect  d: disconnect  esc: back"))
 	return sb.String()
 }

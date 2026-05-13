@@ -77,6 +77,8 @@ function router() {
     renderTemplatesScreen(app);
   } else if (screen === 'prompt') {
     renderPromptScreen(app);
+  } else if (screen === 'connect') {
+    renderConnectScreen(app);
   } else if (screen === 'docs') {
     renderDocsScreen(app);
   } else {
@@ -941,6 +943,68 @@ How the agent should structure its responses:
       <tr><td><strong>Limit tools</strong></td><td>Only give the tools the agent needs — fewer tools = more focused behavior</td></tr>
     </table>
   `;
+}
+
+/* ── connect screen ── */
+
+async function renderConnectScreen(container) {
+  container.innerHTML = `
+    <div class="screen-header"><h1>MCP Connections</h1></div>
+    <p class="section-desc">Connect claudio to Claude Code and Claude Desktop as an MCP server.</p>
+    <div id="connect-targets"><div class="empty">Loading…</div></div>
+  `;
+
+  try {
+    const status = await apiJSON('GET', '/api/connect/status');
+    const targets = document.getElementById('connect-targets');
+    if (!targets) return;
+    targets.innerHTML =
+      renderConnectTarget('claude-code', 'Claude Code', status['claude-code']) +
+      renderConnectTarget('claude-desktop', 'Claude Desktop', status['claude-desktop']);
+
+    targets.addEventListener('click', async e => {
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const { action, target: tgt } = btn.dataset;
+      await toggleConnect(tgt, action === 'connect', container);
+    });
+  } catch (err) {
+    const targets = document.getElementById('connect-targets');
+    if (targets) {
+      targets.innerHTML = `<div class="empty" style="color:var(--danger)">Error: ${esc(err.message)}</div>`;
+    }
+  }
+}
+
+function renderConnectTarget(target, label, connected) {
+  const badge = connected
+    ? `<span class="badge badge-ok">Connected</span>`
+    : `<span class="badge">Not Connected</span>`;
+  const btn = connected
+    ? `<button data-action="disconnect" data-target="${esc(target)}" aria-label="Disconnect ${esc(label)}">Disconnect</button>`
+    : `<button data-action="connect" data-target="${esc(target)}" aria-label="Connect ${esc(label)}">Connect</button>`;
+  return `
+    <div class="card">
+      <div class="card-body">
+        <div class="card-title">${esc(label)}</div>
+        <div class="card-meta">${badge}</div>
+      </div>
+      <div class="card-actions">${btn}</div>
+    </div>
+  `;
+}
+
+async function toggleConnect(target, doConnect, container) {
+  const method = doConnect ? 'POST' : 'DELETE';
+  try {
+    await apiJSON(method, `/api/connect/${target}`);
+    renderConnectScreen(container);
+  } catch (err) {
+    const targets = document.getElementById('connect-targets');
+    if (targets) {
+      targets.insertAdjacentHTML('beforeend', `<div class="empty" style="color:var(--danger)">Error: ${esc(err.message)}</div>`);
+    }
+  }
 }
 
 /* ── health check ── */

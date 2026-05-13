@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"claudio/internal/connect"
 	"claudio/internal/domain"
 	"claudio/internal/store"
 )
@@ -18,6 +19,7 @@ var menuItems = []struct {
 	{"Agents", "Manage specialized agents"},
 	{"Sessions", "View and manage sessions"},
 	{"Install Agent", "Export agent to Claude Code"},
+	{"MCP Connections", "Connect claudio to Claude Code / Claude Desktop"},
 	{"API Service", ""},
 	{"Quit", ""},
 }
@@ -61,11 +63,16 @@ func (m Model) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = ""
 				return m, nil
 			case 4:
+				m.screen = screenConnect
+				m.cursor = 0
+				m.status = ""
+				return m, checkConnectStatusCmd()
+			case 5:
 				if m.serviceRunning {
 					return m, uninstallServiceCmd()
 				}
 				return m, installServiceCmd(m.cfg.Port)
-			case 5:
+			case 6:
 				return m, tea.Quit
 			}
 		}
@@ -491,6 +498,36 @@ func (m Model) updateInstallConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.currentAgent != nil {
 				return m, uninstallAgentCmd(m.currentAgent, m.cfg.WorkDir)
 			}
+		}
+	}
+	return m, nil
+}
+
+// connectTargets lists the two targets in cursor order.
+var connectTargets = []string{connect.TargetClaudeCode, connect.TargetClaudeDesktop}
+
+func (m Model) updateConnect(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.screen = screenMenu
+			m.cursor = 0
+			m.status = ""
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(connectTargets)-1 {
+				m.cursor++
+			}
+		case "c":
+			target := connectTargets[m.cursor]
+			return m, connectCmd(target)
+		case "d":
+			target := connectTargets[m.cursor]
+			return m, disconnectCmd(target)
 		}
 	}
 	return m, nil
