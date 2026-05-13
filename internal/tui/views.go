@@ -95,7 +95,8 @@ func (m Model) renderAgents() string {
 		sb.WriteString(dimStyle.Render("  No agents yet.") + "\n")
 	} else {
 		for i, a := range m.agents {
-			sessCount := len(m.store.ListSessionsByAgent(a.ID))
+			agentSessions, _ := m.store.ListSessionsByAgent(a.ID)
+			sessCount := len(agentSessions)
 			line := fmt.Sprintf("%-20s  %-8s  %d sessions",
 				truncate(a.Name, 20), truncate(a.Model, 8), sessCount)
 			if i == m.cursor {

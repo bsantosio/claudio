@@ -1,3 +1,4 @@
+// Package store provides SQLite persistence for agents and sessions.
 package store
 
 import (
@@ -69,6 +70,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_active TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
+
 `
 	_, err := s.db.Exec(ddl)
 	return err
@@ -78,17 +81,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 func (s *Store) CreateAgent(input domain.Agent, defaultModel string) (*domain.Agent, error) {
 	if input.Name == "" {
-		return nil, errors.New("name is required")
+		return nil, domain.ErrNameRequired
 	}
 	if input.SystemPrompt == "" {
-		return nil, errors.New("system_prompt is required")
+		return nil, domain.ErrPromptRequired
 	}
 	model := input.Model
 	if model == "" {
 		model = defaultModel
 	}
 	if !domain.KnownModels[model] {
-		return nil, errors.New("model not recognized: " + model)
+		return nil, fmt.Errorf("%w: %s", domain.ErrUnknownModel, model)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	id, err := domain.NewUUID()
@@ -147,32 +150,35 @@ func (s *Store) GetAgent(id string) (*domain.Agent, bool) {
 	return a, true
 }
 
-func (s *Store) ListAgents() []*domain.Agent {
+func (s *Store) ListAgents() ([]*domain.Agent, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, created_at, updated_at
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("list agents: %w", err)
 	}
 	defer rows.Close()
 	var result []*domain.Agent
 	for rows.Next() {
 		a, err := scanAgent(rows)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("scan agent: %w", err)
 		}
 		result = append(result, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate agents: %w", err)
 	}
 	if result == nil {
 		result = []*domain.Agent{}
 	}
-	return result
+	return result, nil
 }
 
 func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) (*domain.Agent, error) {
 	existing, ok := s.GetAgent(id)
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, domain.ErrNotFound
 	}
 	if input.Name != "" {
 		existing.Name = input.Name
@@ -182,7 +188,7 @@ func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) 
 	}
 	if input.Model != "" {
 		if !domain.KnownModels[input.Model] {
-			return nil, errors.New("model not recognized: " + input.Model)
+			return nil, fmt.Errorf("%w: %s", domain.ErrUnknownModel, input.Model)
 		}
 		existing.Model = input.Model
 	}
@@ -203,10 +209,19 @@ func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) 
 	}
 	_ = defaultModel
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	allowedJSON, _ := json.Marshal(existing.AllowedTools)
-	disallowedJSON, _ := json.Marshal(existing.DisallowedTools)
-	mcpJSON, _ := json.Marshal(existing.MCPConfig)
-	_, err := s.db.Exec(
+	allowedJSON, err := json.Marshal(existing.AllowedTools)
+	if err != nil {
+		return nil, fmt.Errorf("marshal allowed_tools: %w", err)
+	}
+	disallowedJSON, err := json.Marshal(existing.DisallowedTools)
+	if err != nil {
+		return nil, fmt.Errorf("marshal disallowed_tools: %w", err)
+	}
+	mcpJSON, err := json.Marshal(existing.MCPConfig)
+	if err != nil {
+		return nil, fmt.Errorf("marshal mcp_config: %w", err)
+	}
+	_, err = s.db.Exec(
 		`UPDATE agents SET name=?, system_prompt=?, model=?, max_turns=?, permission_mode=?, allowed_tools=?, disallowed_tools=?, mcp_config=?, updated_at=?
 		 WHERE id=?`,
 		existing.Name, existing.SystemPrompt, existing.Model,
@@ -222,7 +237,7 @@ func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) 
 
 func (s *Store) DeleteAgent(id string) error {
 	if _, ok := s.GetAgent(id); !ok {
-		return errors.New("not found")
+		return domain.ErrNotFound
 	}
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE agent_id = ?`, id).Scan(&count)
@@ -253,13 +268,19 @@ func scanAgent(row agentScanner) (*domain.Agent, error) {
 		return nil, err
 	}
 	if allowedJSON != "" && allowedJSON != "null" {
-		json.Unmarshal([]byte(allowedJSON), &a.AllowedTools)
+		if err := json.Unmarshal([]byte(allowedJSON), &a.AllowedTools); err != nil {
+			return nil, fmt.Errorf("unmarshal allowed_tools: %w", err)
+		}
 	}
 	if disallowedJSON != "" && disallowedJSON != "null" {
-		json.Unmarshal([]byte(disallowedJSON), &a.DisallowedTools)
+		if err := json.Unmarshal([]byte(disallowedJSON), &a.DisallowedTools); err != nil {
+			return nil, fmt.Errorf("unmarshal disallowed_tools: %w", err)
+		}
 	}
 	if mcpJSON != "" && mcpJSON != "null" {
-		json.Unmarshal([]byte(mcpJSON), &a.MCPConfig)
+		if err := json.Unmarshal([]byte(mcpJSON), &a.MCPConfig); err != nil {
+			return nil, fmt.Errorf("unmarshal mcp_config: %w", err)
+		}
 	}
 	return &a, nil
 }
@@ -316,33 +337,35 @@ func (s *Store) getOrCacheSession(freshFromDB *domain.Session) *domain.Session {
 	return canonical
 }
 
-func (s *Store) ListSessionsByAgent(agentID string) []*domain.Session {
+func (s *Store) ListSessionsByAgent(agentID string) ([]*domain.Session, error) {
 	rows, err := s.db.Query(
 		`SELECT id, agent_id, name, turn_count, created_at, last_active FROM sessions WHERE agent_id = ? ORDER BY created_at`,
 		agentID)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 	defer rows.Close()
 	var result []*domain.Session
 	for rows.Next() {
 		var sess domain.Session
-		err := rows.Scan(&sess.ID, &sess.AgentID, &sess.Name, &sess.TurnCount, &sess.CreatedAt, &sess.LastActive)
-		if err != nil {
-			continue
+		if err := rows.Scan(&sess.ID, &sess.AgentID, &sess.Name, &sess.TurnCount, &sess.CreatedAt, &sess.LastActive); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
 		}
 		result = append(result, s.getOrCacheSession(&sess))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sessions: %w", err)
 	}
 	if result == nil {
 		result = []*domain.Session{}
 	}
-	return result
+	return result, nil
 }
 
 func (s *Store) DeleteSession(id string) error {
 	_, ok := s.GetSession(id)
 	if !ok {
-		return errors.New("not found")
+		return domain.ErrNotFound
 	}
 	mu := s.Mutexes.Get(id)
 	if !mu.TryLock() {

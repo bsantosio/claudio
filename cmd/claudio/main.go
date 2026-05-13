@@ -41,6 +41,12 @@ func loadConfig() domain.Config {
 	}
 }
 
+func validateConfig(cfg domain.Config) {
+	if !domain.KnownModels[cfg.DefaultModel] {
+		log.Fatalf("DEFAULT_MODEL %q is not a recognized model", cfg.DefaultModel)
+	}
+}
+
 func checkAuth(fatal bool) {
 	authStatus, _ := server.CheckClaudeAuth()
 	if authStatus != "authenticated" {
@@ -113,6 +119,7 @@ func main() {
 
 func cmdTUI() {
 	cfg := loadConfig()
+	validateConfig(cfg)
 	checkAuth(true)
 	st := openStore(cfg)
 	defer st.Close()
@@ -125,6 +132,7 @@ func cmdTUI() {
 
 func cmdWeb() {
 	cfg := loadConfig()
+	validateConfig(cfg)
 	url := fmt.Sprintf("http://localhost:%s", cfg.Port)
 
 	if isPortOpen(cfg.Port) {

@@ -10,15 +10,14 @@ import (
 
 	"claudio/internal/claude"
 	"claudio/internal/domain"
-	"claudio/internal/store"
 )
 
 type OpenAIChatRequest struct {
-	Model    string         `json:"model"`
-	Messages []OpenAIMessage `json:"messages"`
-	Stream   *bool          `json:"stream,omitempty"`
-	Temperature *float64 `json:"temperature,omitempty"`
-	MaxTokens   *int     `json:"max_tokens,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []OpenAIMessage `json:"messages"`
+	Stream      *bool           `json:"stream,omitempty"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	MaxTokens   *int            `json:"max_tokens,omitempty"`
 }
 
 type OpenAIMessage struct {
@@ -104,11 +103,12 @@ func modelsHandler(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, resp)
 }
 
-func openaiCompletionsHandler(
-	cfg domain.Config,
-	st *store.Store,
-	runner claude.Runner,
-) http.HandlerFunc {
+func (s *Server) registerOpenAIHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/models", modelsHandler)
+	mux.HandleFunc("POST /v1/chat/completions", s.openaiCompletionsHandler())
+}
+
+func (s *Server) openaiCompletionsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req OpenAIChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -121,7 +121,7 @@ func openaiCompletionsHandler(
 		}
 		var agent *domain.Agent
 		if agentID := r.Header.Get("X-Agent-Id"); agentID != "" {
-			a, ok := st.GetAgent(agentID)
+			a, ok := s.store.GetAgent(agentID)
 			if !ok {
 				WriteError(w, http.StatusNotFound, "agent not found")
 				return
@@ -130,10 +130,10 @@ func openaiCompletionsHandler(
 		} else {
 			model := NormalizeModel(req.Model)
 			if model == "" {
-				model = cfg.DefaultModel
+				model = s.cfg.DefaultModel
 			}
 			if !domain.KnownModels[model] {
-				model = cfg.DefaultModel
+				model = s.cfg.DefaultModel
 			}
 			systemPrompt := ""
 			for _, msg := range req.Messages {
@@ -150,7 +150,6 @@ func openaiCompletionsHandler(
 				SystemPrompt: systemPrompt,
 			}
 		}
-		streaming := req.Stream != nil && *req.Stream
 		var promptParts []string
 		for _, msg := range req.Messages {
 			if msg.Role == "system" {
@@ -170,7 +169,7 @@ func openaiCompletionsHandler(
 		}
 		resume := false
 		if sid := r.Header.Get("X-Session-Id"); sid != "" {
-			if sess, ok := st.GetSession(sid); ok {
+			if sess, ok := s.store.GetSession(sid); ok {
 				sessionID = sess.ID
 				resume = sess.TurnCount > 0
 				sess.TurnCount++
@@ -178,112 +177,113 @@ func openaiCompletionsHandler(
 		}
 		completionID := "chatcmpl-" + sessionID
 		created := time.Now().Unix()
-		modelID := agent.Model
+
+		streaming := req.Stream != nil && *req.Stream
 		if streaming {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-			w.WriteHeader(http.StatusOK)
-			flusher, canFlush := w.(http.Flusher)
-			sendChunk := func(content string, finishReason *string) {
-				chunk := ChatCompletionChunk{
-					ID:      completionID,
-					Object:  "chat.completion.chunk",
-					Created: created,
-					Model:   modelID,
-					Choices: []ChunkChoice{
-						{
-							Index:        0,
-							Delta:        ChunkDelta{Content: content},
-							FinishReason: finishReason,
-						},
-					},
-				}
-				data, _ := json.Marshal(chunk)
-				fmt.Fprintf(w, "data: %s\n\n", data)
-				if canFlush {
-					flusher.Flush()
-				}
-			}
-			ctx := r.Context()
-			runner(ctx, cfg, agent, sessionID, prompt, resume, func(eventType string, data []byte) error {
-				switch eventType {
-				case "assistant":
-					ev, err := claude.ParseNDJSON(string(data))
-					if err != nil {
-						return nil
-					}
-					text, err := claude.ExtractText(ev)
-					if err != nil || text == "" {
-						return nil
-					}
-					sendChunk(text, nil)
-				case "result":
-					stop := "stop"
-					sendChunk("", &stop)
-				}
-				return nil
-			})
-			fmt.Fprint(w, "data: [DONE]\n\n")
-			if canFlush {
-				flusher.Flush()
-			}
+			s.handleOpenAIStream(w, r, agent, sessionID, prompt, resume, completionID, created)
 		} else {
-			var buf bytes.Buffer
-			var usage OpenAIUsage
-			ctx := r.Context()
-			runErr := runner(ctx, cfg, agent, sessionID, prompt, resume, func(eventType string, data []byte) error {
-				if eventType == "result" {
-					var resultEv struct {
-						Result string `json:"result"`
-						Usage  struct {
-							InputTokens              int `json:"input_tokens"`
-							OutputTokens             int `json:"output_tokens"`
-							CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-							CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-						} `json:"usage"`
-					}
-					if err := json.Unmarshal(data, &resultEv); err == nil {
-						buf.WriteString(resultEv.Result)
-						usage.PromptTokens = resultEv.Usage.InputTokens + resultEv.Usage.CacheReadInputTokens + resultEv.Usage.CacheCreationInputTokens
-						usage.CompletionTokens = resultEv.Usage.OutputTokens
-						usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-					}
-				}
-				return nil
-			})
-			if runErr != nil {
-				WriteError(w, http.StatusInternalServerError, runErr.Error())
-				return
-			}
-			resp := OpenAIChatResponse{
-				ID:      completionID,
-				Object:  "chat.completion",
-				Created: created,
-				Model:   modelID,
-				Choices: []OpenAIChoice{
-					{
-						Index: 0,
-						Message: OpenAIMessage{
-							Role:    "assistant",
-							Content: buf.String(),
-						},
-						FinishReason: "stop",
-					},
-				},
-				Usage: usage,
-			}
-			WriteJSON(w, http.StatusOK, resp)
+			s.handleOpenAISync(w, r, agent, sessionID, prompt, resume, completionID, created)
 		}
 	}
 }
 
-func RegisterOpenAIHandlers(
-	mux *http.ServeMux,
-	cfg domain.Config,
-	st *store.Store,
-	runner claude.Runner,
-) {
-	mux.HandleFunc("GET /v1/models", modelsHandler)
-	mux.HandleFunc("POST /v1/chat/completions", openaiCompletionsHandler(cfg, st, runner))
+func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, agent *domain.Agent, sessionID, prompt string, resume bool, completionID string, created int64) {
+	modelID := agent.Model
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher, canFlush := w.(http.Flusher)
+	sendChunk := func(content string, finishReason *string) {
+		chunk := ChatCompletionChunk{
+			ID:      completionID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   modelID,
+			Choices: []ChunkChoice{
+				{
+					Index:        0,
+					Delta:        ChunkDelta{Content: content},
+					FinishReason: finishReason,
+				},
+			},
+		}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+	ctx := r.Context()
+	s.runner(ctx, s.cfg, agent, sessionID, prompt, resume, func(eventType string, data []byte) error {
+		switch eventType {
+		case "assistant":
+			ev, err := claude.ParseNDJSON(string(data))
+			if err != nil {
+				return nil
+			}
+			text, err := claude.ExtractText(ev)
+			if err != nil || text == "" {
+				return nil
+			}
+			sendChunk(text, nil)
+		case "result":
+			stop := "stop"
+			sendChunk("", &stop)
+		}
+		return nil
+	})
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	if canFlush {
+		flusher.Flush()
+	}
+}
+
+func (s *Server) handleOpenAISync(w http.ResponseWriter, r *http.Request, agent *domain.Agent, sessionID, prompt string, resume bool, completionID string, created int64) {
+	modelID := agent.Model
+	var buf bytes.Buffer
+	var usage OpenAIUsage
+	ctx := r.Context()
+	runErr := s.runner(ctx, s.cfg, agent, sessionID, prompt, resume, func(eventType string, data []byte) error {
+		if eventType == "result" {
+			var resultEv struct {
+				Result string `json:"result"`
+				Usage  struct {
+					InputTokens              int `json:"input_tokens"`
+					OutputTokens             int `json:"output_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal(data, &resultEv); err == nil {
+				buf.WriteString(resultEv.Result)
+				usage.PromptTokens = resultEv.Usage.InputTokens + resultEv.Usage.CacheReadInputTokens + resultEv.Usage.CacheCreationInputTokens
+				usage.CompletionTokens = resultEv.Usage.OutputTokens
+				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			}
+		}
+		return nil
+	})
+	if runErr != nil {
+		WriteError(w, http.StatusInternalServerError, runErr.Error())
+		return
+	}
+	resp := OpenAIChatResponse{
+		ID:      completionID,
+		Object:  "chat.completion",
+		Created: created,
+		Model:   modelID,
+		Choices: []OpenAIChoice{
+			{
+				Index: 0,
+				Message: OpenAIMessage{
+					Role:    "assistant",
+					Content: buf.String(),
+				},
+				FinishReason: "stop",
+			},
+		},
+		Usage: usage,
+	}
+	WriteJSON(w, http.StatusOK, resp)
 }

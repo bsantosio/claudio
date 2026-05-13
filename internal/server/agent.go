@@ -8,18 +8,16 @@ import (
 
 	"claudio/internal/claude"
 	"claudio/internal/domain"
-	"claudio/internal/store"
 )
 
-
-func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Store) {
+func (s *Server) registerAgentHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("POST /agents", func(w http.ResponseWriter, r *http.Request) {
 		var input domain.Agent
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			WriteError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		a, err := st.CreateAgent(input, cfg.DefaultModel)
+		a, err := s.store.CreateAgent(input, s.cfg.DefaultModel)
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -28,16 +26,17 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 	})
 
 	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, r *http.Request) {
-		all := st.ListAgents()
-		if all == nil {
-			all = []*domain.Agent{}
+		all, err := s.store.ListAgents()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
 		WriteJSON(w, http.StatusOK, all)
 	})
 
 	mux.HandleFunc("GET /agents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		a, ok := st.GetAgent(id)
+		a, ok := s.store.GetAgent(id)
 		if !ok {
 			WriteError(w, http.StatusNotFound, "agent not found")
 			return
@@ -52,9 +51,9 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 			WriteError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		a, err := st.UpdateAgent(id, input, cfg.DefaultModel)
+		a, err := s.store.UpdateAgent(id, input, s.cfg.DefaultModel)
 		if err != nil {
-			if err.Error() == "not found" {
+			if errors.Is(err, domain.ErrNotFound) {
 				WriteError(w, http.StatusNotFound, "agent not found")
 			} else {
 				WriteError(w, http.StatusBadRequest, err.Error())
@@ -66,11 +65,11 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 
 	mux.HandleFunc("DELETE /agents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		err := st.DeleteAgent(id)
+		err := s.store.DeleteAgent(id)
 		if err != nil {
 			if errors.Is(err, domain.ErrHasActiveSessions) {
 				WriteError(w, http.StatusConflict, "agent has active sessions; delete sessions first")
-			} else if err.Error() == "not found" {
+			} else if errors.Is(err, domain.ErrNotFound) {
 				WriteError(w, http.StatusNotFound, "agent not found")
 			} else {
 				WriteError(w, http.StatusInternalServerError, err.Error())
@@ -101,7 +100,7 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 
 		var result strings.Builder
 		ctx := r.Context()
-		err := claude.RunClaude(ctx, cfg, generatorAgent, sessionID, input.Description, false, func(eventType string, data []byte) error {
+		err := claude.RunClaude(ctx, s.cfg, generatorAgent, sessionID, input.Description, false, func(eventType string, data []byte) error {
 			if eventType == "result" {
 				var ev struct {
 					Result string `json:"result"`
@@ -137,12 +136,12 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 	// Task 2.3 — Install agent: copies definition to .claude/agents/.
 	mux.HandleFunc("POST /agents/{id}/install", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		a, ok := st.GetAgent(id)
+		a, ok := s.store.GetAgent(id)
 		if !ok {
 			WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
-		if err := domain.InstallAgent(a, cfg.WorkDir); err != nil {
+		if err := domain.InstallAgent(a, s.cfg.WorkDir); err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -152,12 +151,12 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 	// Task 2.4 — Uninstall agent: removes definition from .claude/agents/.
 	mux.HandleFunc("DELETE /agents/{id}/install", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		a, ok := st.GetAgent(id)
+		a, ok := s.store.GetAgent(id)
 		if !ok {
 			WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
-		if err := domain.UninstallAgent(a, cfg.WorkDir); err != nil {
+		if err := domain.UninstallAgent(a, s.cfg.WorkDir); err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

@@ -3,24 +3,19 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"claudio/internal/claude"
-	"claudio/internal/domain"
 	"claudio/internal/store"
 )
 
-func RegisterMessageHandler(
-	mux *http.ServeMux,
-	cfg domain.Config,
-	st *store.Store,
-	runner claude.Runner,
-) {
+func (s *Server) registerMessageHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sessions/{sid}/message", func(w http.ResponseWriter, r *http.Request) {
 		sid := r.PathValue("sid")
-		sess, ok := st.GetSession(sid)
+		sess, ok := s.store.GetSession(sid)
 		if !ok {
 			WriteError(w, http.StatusNotFound, "session not found")
 			return
@@ -36,12 +31,12 @@ func RegisterMessageHandler(
 			WriteError(w, http.StatusBadRequest, "content is required")
 			return
 		}
-		agent, ok := st.GetAgent(sess.AgentID)
+		agent, ok := s.store.GetAgent(sess.AgentID)
 		if !ok {
 			WriteError(w, http.StatusNotFound, "agent not found for session")
 			return
 		}
-		mu := st.Mutexes.Get(sess.ID)
+		mu := s.store.Mutexes.Get(sess.ID)
 		mu.Lock()
 		defer mu.Unlock()
 		resume := sess.TurnCount > 0
@@ -53,7 +48,7 @@ func RegisterMessageHandler(
 		w.WriteHeader(http.StatusOK)
 		flusher, canFlush := w.(http.Flusher)
 		ctx := r.Context()
-		err := runner(ctx, cfg, agent, sess.ID, input.Content, resume, func(eventType string, data []byte) error {
+		err := s.runner(ctx, s.cfg, agent, sess.ID, input.Content, resume, func(eventType string, data []byte) error {
 			var sseEvent string
 			switch eventType {
 			case "system":
@@ -99,7 +94,7 @@ func RegisterMessageHandler(
 				var contextWindow, maxOutput int
 				if resultEv.ModelUsage != nil {
 					var mu map[string]struct {
-						ContextWindow  int `json:"contextWindow"`
+						ContextWindow   int `json:"contextWindow"`
 						MaxOutputTokens int `json:"maxOutputTokens"`
 					}
 					if json.Unmarshal(resultEv.ModelUsage, &mu) == nil {
@@ -144,16 +139,18 @@ func RegisterMessageHandler(
 				flusher.Flush()
 			}
 		}
-		st.SaveSession(sess)
+		if err := s.store.SaveSession(sess); err != nil {
+			log.Printf("failed to save session: %v", err)
+		}
 	})
 
 	mux.HandleFunc("GET /sessions/{sid}/messages", func(w http.ResponseWriter, r *http.Request) {
 		sid := r.PathValue("sid")
-		if _, ok := st.GetSession(sid); !ok {
+		if _, ok := s.store.GetSession(sid); !ok {
 			WriteError(w, http.StatusNotFound, "session not found")
 			return
 		}
-		msgs, err := store.ReadSessionMessages(cfg.WorkDir, sid)
+		msgs, err := store.ReadSessionMessages(s.cfg.WorkDir, sid)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return

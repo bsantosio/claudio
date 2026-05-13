@@ -6,13 +6,12 @@ import (
 	"net/http"
 
 	"claudio/internal/domain"
-	"claudio/internal/store"
 )
 
-func RegisterSessionHandlers(mux *http.ServeMux, _ domain.Config, st *store.Store) {
+func (s *Server) registerSessionHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("POST /agents/{aid}/sessions", func(w http.ResponseWriter, r *http.Request) {
 		aid := r.PathValue("aid")
-		if _, ok := st.GetAgent(aid); !ok {
+		if _, ok := s.store.GetAgent(aid); !ok {
 			WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
@@ -20,7 +19,7 @@ func RegisterSessionHandlers(mux *http.ServeMux, _ domain.Config, st *store.Stor
 			Name string `json:"name"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&input)
-		sess, err := st.CreateSession(aid, input.Name)
+		sess, err := s.store.CreateSession(aid, input.Name)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -30,20 +29,21 @@ func RegisterSessionHandlers(mux *http.ServeMux, _ domain.Config, st *store.Stor
 
 	mux.HandleFunc("GET /agents/{aid}/sessions", func(w http.ResponseWriter, r *http.Request) {
 		aid := r.PathValue("aid")
-		if _, ok := st.GetAgent(aid); !ok {
+		if _, ok := s.store.GetAgent(aid); !ok {
 			WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
-		list := st.ListSessionsByAgent(aid)
-		if list == nil {
-			list = []*domain.Session{}
+		list, err := s.store.ListSessionsByAgent(aid)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
 		WriteJSON(w, http.StatusOK, list)
 	})
 
 	mux.HandleFunc("GET /sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {
 		sid := r.PathValue("sid")
-		sess, ok := st.GetSession(sid)
+		sess, ok := s.store.GetSession(sid)
 		if !ok {
 			WriteError(w, http.StatusNotFound, "session not found")
 			return
@@ -53,11 +53,11 @@ func RegisterSessionHandlers(mux *http.ServeMux, _ domain.Config, st *store.Stor
 
 	mux.HandleFunc("DELETE /sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {
 		sid := r.PathValue("sid")
-		err := st.DeleteSession(sid)
+		err := s.store.DeleteSession(sid)
 		if err != nil {
 			if errors.Is(err, domain.ErrSessionBusy) {
 				WriteError(w, http.StatusConflict, "session has an active stream; wait for it to complete")
-			} else if err.Error() == "not found" {
+			} else if errors.Is(err, domain.ErrNotFound) {
 				WriteError(w, http.StatusNotFound, "session not found")
 			} else {
 				WriteError(w, http.StatusInternalServerError, err.Error())

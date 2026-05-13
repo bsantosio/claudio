@@ -1,3 +1,4 @@
+// Package mcp implements the Model Context Protocol server over stdio.
 package mcp
 
 import (
@@ -15,7 +16,33 @@ import (
 	"claudio/internal/store"
 )
 
-var RunnerOverride claude.Runner
+// requireString extracts a required string field from args, returning an error
+// if the key is missing, not a string, or blank after trimming whitespace.
+func requireString(args map[string]any, key string) (string, error) {
+	v, ok := args[key]
+	if !ok {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	if strings.TrimSpace(s) == "" {
+		return "", fmt.Errorf("%s cannot be empty", key)
+	}
+	return s, nil
+}
+
+// optionalString extracts an optional string field from args. Returns "" when
+// the key is absent or the value is not a string.
+func optionalString(args map[string]any, key string) string {
+	v, ok := args[key]
+	if !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
 
 type JSONRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -102,7 +129,15 @@ func mcpTools() []map[string]any {
 	return result
 }
 
+// HandleMCPRequest dispatches an MCP JSON-RPC request using a nil runner
+// (falls back to claude.RunClaude for tools that invoke Claude).
 func HandleMCPRequest(req JSONRPCRequest, cfg domain.Config, st *store.Store) *JSONRPCResponse {
+	return HandleMCPRequestWithRunner(req, cfg, st, nil)
+}
+
+// HandleMCPRequestWithRunner dispatches an MCP JSON-RPC request, passing an
+// explicit runner to tool handlers. A nil runner uses claude.RunClaude.
+func HandleMCPRequestWithRunner(req JSONRPCRequest, cfg domain.Config, st *store.Store, runner claude.Runner) *JSONRPCResponse {
 	if req.ID == nil && req.Method != "" {
 		handleNotification(req)
 		return nil
@@ -122,7 +157,7 @@ func HandleMCPRequest(req JSONRPCRequest, cfg domain.Config, st *store.Store) *J
 	case "tools/list":
 		resp.Result = map[string]any{"tools": mcpTools()}
 	case "tools/call":
-		resp.Result = handleToolsCall(req, cfg, st)
+		resp.Result = handleToolsCallWithRunner(req, cfg, st, runner)
 	default:
 		resp.Error = &RPCError{Code: rpcMethodNotFound, Message: "method not found: " + req.Method}
 	}
@@ -138,7 +173,7 @@ func handleNotification(req JSONRPCRequest) {
 	}
 }
 
-func handleToolsCall(req JSONRPCRequest, cfg domain.Config, st *store.Store) map[string]any {
+func handleToolsCallWithRunner(req JSONRPCRequest, cfg domain.Config, st *store.Store, runner claude.Runner) map[string]any {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -169,7 +204,7 @@ func handleToolsCall(req JSONRPCRequest, cfg domain.Config, st *store.Store) map
 	case "list_sessions":
 		return toolListSessions(args, st)
 	case "send_message":
-		return toolSendMessage(args, cfg, st)
+		return toolSendMessage(args, cfg, st, runner)
 	case "get_messages":
 		return toolGetMessages(args, cfg)
 	case "delete_session":
@@ -181,17 +216,23 @@ func handleToolsCall(req JSONRPCRequest, cfg domain.Config, st *store.Store) map
 	case "list_templates":
 		return toolListTemplates()
 	case "generate_agent":
-		return toolGenerateAgent(args, cfg, st)
+		return toolGenerateAgent(args, cfg, st, runner)
 	default:
 		return toolError("unknown tool: " + params.Name)
 	}
 }
 
 func toolCreateAgent(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
-	name, _ := args["name"].(string)
-	systemPrompt, _ := args["system_prompt"].(string)
-	model, _ := args["model"].(string)
-	permissionMode, _ := args["permission_mode"].(string)
+	name, err := requireString(args, "name")
+	if err != nil {
+		return toolError(err.Error())
+	}
+	systemPrompt, err := requireString(args, "system_prompt")
+	if err != nil {
+		return toolError(err.Error())
+	}
+	model := optionalString(args, "model")
+	permissionMode := optionalString(args, "permission_mode")
 	var allowedTools []string
 	if raw, ok := args["allowed_tools"].([]any); ok {
 		for _, v := range raw {
@@ -214,13 +255,19 @@ func toolCreateAgent(args map[string]any, cfg domain.Config, st *store.Store) ma
 }
 
 func toolListAgents(st *store.Store) map[string]any {
-	agents := st.ListAgents()
+	agents, err := st.ListAgents()
+	if err != nil {
+		return toolError(err.Error())
+	}
 	b, _ := json.Marshal(agents)
 	return toolResult(string(b))
 }
 
 func toolGetAgent(args map[string]any, st *store.Store) map[string]any {
-	id, _ := args["agent_id"].(string)
+	id, err := requireString(args, "agent_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
 	agent, ok := st.GetAgent(id)
 	if !ok {
 		return toolError("agent not found: " + id)
@@ -230,7 +277,10 @@ func toolGetAgent(args map[string]any, st *store.Store) map[string]any {
 }
 
 func toolDeleteAgent(args map[string]any, st *store.Store) map[string]any {
-	id, _ := args["agent_id"].(string)
+	id, err := requireString(args, "agent_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
 	if err := st.DeleteAgent(id); err != nil {
 		return toolError(err.Error())
 	}
@@ -238,8 +288,11 @@ func toolDeleteAgent(args map[string]any, st *store.Store) map[string]any {
 }
 
 func toolCreateSession(args map[string]any, st *store.Store) map[string]any {
-	agentID, _ := args["agent_id"].(string)
-	name, _ := args["name"].(string)
+	agentID, err := requireString(args, "agent_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
+	name := optionalString(args, "name")
 	if _, ok := st.GetAgent(agentID); !ok {
 		return toolError("agent not found: " + agentID)
 	}
@@ -252,15 +305,27 @@ func toolCreateSession(args map[string]any, st *store.Store) map[string]any {
 }
 
 func toolListSessions(args map[string]any, st *store.Store) map[string]any {
-	agentID, _ := args["agent_id"].(string)
-	sessions := st.ListSessionsByAgent(agentID)
+	agentID, err := requireString(args, "agent_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
+	sessions, err := st.ListSessionsByAgent(agentID)
+	if err != nil {
+		return toolError(err.Error())
+	}
 	b, _ := json.Marshal(sessions)
 	return toolResult(string(b))
 }
 
-func toolSendMessage(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
-	sessionID, _ := args["session_id"].(string)
-	content, _ := args["content"].(string)
+func toolSendMessage(args map[string]any, cfg domain.Config, st *store.Store, runner claude.Runner) map[string]any {
+	sessionID, err := requireString(args, "session_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
+	content, err := requireString(args, "content")
+	if err != nil {
+		return toolError(err.Error())
+	}
 	sess, ok := st.GetSession(sessionID)
 	if !ok {
 		return toolError("session not found: " + sessionID)
@@ -276,12 +341,11 @@ func toolSendMessage(args map[string]any, cfg domain.Config, st *store.Store) ma
 	sess.TurnCount++
 	sess.LastActive = time.Now().UTC().Format(time.RFC3339Nano)
 	var responseText strings.Builder
-	runner := claude.Runner(claude.RunClaude)
-	if RunnerOverride != nil {
-		runner = RunnerOverride
+	if runner == nil {
+		runner = claude.Runner(claude.RunClaude)
 	}
 	ctx := context.Background()
-	err := runner(ctx, cfg, agent, sess.ID, content, resume, func(eventType string, data []byte) error {
+	err = runner(ctx, cfg, agent, sess.ID, content, resume, func(eventType string, data []byte) error {
 		switch eventType {
 		case "assistant":
 			ev, err := claude.ParseNDJSON(string(data))
@@ -311,12 +375,17 @@ func toolSendMessage(args map[string]any, cfg domain.Config, st *store.Store) ma
 		return toolError("claude error: " + err.Error())
 	}
 	text := responseText.String()
-	st.SaveSession(sess)
+	if err := st.SaveSession(sess); err != nil {
+		log.Printf("mcp: failed to save session: %v", err)
+	}
 	return toolResult(text)
 }
 
 func toolGetMessages(args map[string]any, cfg domain.Config) map[string]any {
-	sessionID, _ := args["session_id"].(string)
+	sessionID, err := requireString(args, "session_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
 	msgs, err := store.ReadSessionMessages(cfg.WorkDir, sessionID)
 	if err != nil {
 		return toolError(err.Error())
@@ -326,7 +395,10 @@ func toolGetMessages(args map[string]any, cfg domain.Config) map[string]any {
 }
 
 func toolDeleteSession(args map[string]any, st *store.Store) map[string]any {
-	id, _ := args["session_id"].(string)
+	id, err := requireString(args, "session_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
 	if err := st.DeleteSession(id); err != nil {
 		return toolError(err.Error())
 	}
@@ -334,7 +406,10 @@ func toolDeleteSession(args map[string]any, st *store.Store) map[string]any {
 }
 
 func toolInstallAgent(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
-	id, _ := args["agent_id"].(string)
+	id, err := requireString(args, "agent_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
 	agent, ok := st.GetAgent(id)
 	if !ok {
 		return toolError("agent not found: " + id)
@@ -347,7 +422,10 @@ func toolInstallAgent(args map[string]any, cfg domain.Config, st *store.Store) m
 }
 
 func toolUninstallAgent(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
-	id, _ := args["agent_id"].(string)
+	id, err := requireString(args, "agent_id")
+	if err != nil {
+		return toolError(err.Error())
+	}
 	agent, ok := st.GetAgent(id)
 	if !ok {
 		return toolError("agent not found: " + id)
@@ -363,10 +441,10 @@ func toolListTemplates() map[string]any {
 	return toolResult(string(b))
 }
 
-func toolGenerateAgent(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
-	description, _ := args["description"].(string)
-	if strings.TrimSpace(description) == "" {
-		return toolError("description is required")
+func toolGenerateAgent(args map[string]any, cfg domain.Config, st *store.Store, runner claude.Runner) map[string]any {
+	description, err := requireString(args, "description")
+	if err != nil {
+		return toolError(err.Error())
 	}
 
 	generatorAgent := &domain.Agent{
@@ -376,13 +454,12 @@ func toolGenerateAgent(args map[string]any, cfg domain.Config, st *store.Store) 
 	sessionID, _ := domain.NewUUID()
 
 	var result strings.Builder
-	runner := claude.Runner(claude.RunClaude)
-	if RunnerOverride != nil {
-		runner = RunnerOverride
+	if runner == nil {
+		runner = claude.Runner(claude.RunClaude)
 	}
 
 	ctx := context.Background()
-	err := runner(ctx, cfg, generatorAgent, sessionID, description, false, func(eventType string, data []byte) error {
+	err = runner(ctx, cfg, generatorAgent, sessionID, description, false, func(eventType string, data []byte) error {
 		if eventType == "result" {
 			var ev struct {
 				Result string `json:"result"`
@@ -406,7 +483,15 @@ func toolGenerateAgent(args map[string]any, cfg domain.Config, st *store.Store) 
 	return toolResult(text)
 }
 
+// RunMCPServer runs the MCP server reading from r and writing to w, using
+// claude.RunClaude as the runner.
 func RunMCPServer(cfg domain.Config, st *store.Store, r io.Reader, w io.Writer) error {
+	return RunMCPServerWithRunner(cfg, st, r, w, nil)
+}
+
+// RunMCPServerWithRunner runs the MCP server with an explicit runner. A nil
+// runner falls back to claude.RunClaude.
+func RunMCPServerWithRunner(cfg domain.Config, st *store.Store, r io.Reader, w io.Writer, runner claude.Runner) error {
 	scanner := bufio.NewScanner(r)
 	buf := make([]byte, 10*1024*1024)
 	scanner.Buffer(buf, 10*1024*1024)
@@ -425,7 +510,7 @@ func RunMCPServer(cfg domain.Config, st *store.Store, r io.Reader, w io.Writer) 
 			fmt.Fprintln(w, string(data))
 			continue
 		}
-		resp := HandleMCPRequest(req, cfg, st)
+		resp := HandleMCPRequestWithRunner(req, cfg, st, runner)
 		if resp == nil {
 			continue
 		}

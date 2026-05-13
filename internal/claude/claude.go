@@ -1,3 +1,4 @@
+// Package claude invokes the Claude CLI and parses its streaming output.
 package claude
 
 import (

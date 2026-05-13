@@ -1,3 +1,4 @@
+// Package webui serves the embedded web interface.
 package webui
 
 import (

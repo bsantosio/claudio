@@ -1,3 +1,4 @@
+// Package tui provides the Bubble Tea terminal interface for claudio.
 package tui
 
 import (
@@ -16,7 +17,10 @@ import (
 
 func loadAgentsCmd(st *store.Store) tea.Cmd {
 	return func() tea.Msg {
-		all := st.ListAgents()
+		all, err := st.ListAgents()
+		if err != nil {
+			return chatErrorMsg{err: err}
+		}
 		var filtered []*domain.Agent
 		for _, a := range all {
 			if a.Name != "__quick_chat__" {
@@ -29,7 +33,11 @@ func loadAgentsCmd(st *store.Store) tea.Cmd {
 
 func loadSessionsCmd(st *store.Store, agentID string) tea.Cmd {
 	return func() tea.Msg {
-		return sessionsLoadedMsg{sessions: st.ListSessionsByAgent(agentID)}
+		sessions, err := st.ListSessionsByAgent(agentID)
+		if err != nil {
+			return chatErrorMsg{err: err}
+		}
+		return sessionsLoadedMsg{sessions: sessions}
 	}
 }
 
@@ -44,7 +52,7 @@ func loadAllSessionsCmd(st *store.Store, agents []*domain.Agent) tea.Cmd {
 	return func() tea.Msg {
 		var all []sessionWithAgent
 		for _, a := range agents {
-			sessions := st.ListSessionsByAgent(a.ID)
+			sessions, _ := st.ListSessionsByAgent(a.ID)
 			for _, s := range sessions {
 				all = append(all, sessionWithAgent{sess: s, agentName: a.Name})
 			}

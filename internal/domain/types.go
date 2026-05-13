@@ -3,7 +3,6 @@ package domain
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sync"
 )
@@ -33,8 +32,6 @@ type Agent struct {
 	UpdatedAt       string         `json:"updated_at"`
 }
 
-var ErrHasActiveSessions = errors.New("agent has active sessions")
-
 var KnownModels = map[string]bool{
 	"haiku":                    true,
 	"sonnet":                   true,
@@ -55,8 +52,6 @@ type Session struct {
 	CreatedAt  string `json:"created_at"`
 	LastActive string `json:"last_active,omitempty"`
 }
-
-var ErrSessionBusy = errors.New("session has an in-flight request")
 
 type Message struct {
 	SessionID string `json:"session_id,omitempty"`

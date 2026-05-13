@@ -1,3 +1,4 @@
+// Package service manages the macOS launchd background service.
 package service
 
 import (

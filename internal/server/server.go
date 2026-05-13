@@ -1,16 +1,34 @@
+// Package server implements the HTTP API and OpenAI-compatible endpoints.
 package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 
 	"claudio/internal/claude"
 	"claudio/internal/domain"
 	"claudio/internal/store"
 	"claudio/internal/webui"
 )
+
+// Server holds shared dependencies for all HTTP handlers.
+type Server struct {
+	cfg    domain.Config
+	store  *store.Store
+	runner claude.Runner
+}
+
+// New creates a Server. If runner is nil, claude.RunClaude is used.
+func New(cfg domain.Config, st *store.Store, runner claude.Runner) *Server {
+	if runner == nil {
+		runner = claude.RunClaude
+	}
+	return &Server{cfg: cfg, store: st, runner: runner}
+}
 
 func CheckClaudeAuth() (authStatus string, versionStr string) {
 	cmd := exec.Command("claude", "--version")
@@ -49,6 +67,14 @@ func corsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("%s %s %v", r.Method, r.URL.Path, time.Since(start))
 	})
 }
 
@@ -99,26 +125,17 @@ func BuildMux(cfg domain.Config, st *store.Store) http.Handler {
 }
 
 func BuildMuxWithRunner(cfg domain.Config, st *store.Store, runner claude.Runner) http.Handler {
+	s := New(cfg, st, runner)
 	mux := http.NewServeMux()
 	webui.RegisterHandler(mux)
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /api/prompt", promptHandler)
 	mux.HandleFunc("GET /api/templates", templatesHandler)
 	if st != nil {
-		RegisterAgentHandlers(mux, cfg, st)
+		s.registerAgentHandlers(mux)
+		s.registerSessionHandlers(mux)
+		s.registerMessageHandlers(mux)
+		s.registerOpenAIHandlers(mux)
 	}
-	if st != nil {
-		RegisterSessionHandlers(mux, cfg, st)
-	}
-	if st != nil {
-		var claudeRunner claude.Runner
-		if runner != nil {
-			claudeRunner = runner
-		} else {
-			claudeRunner = claude.RunClaude
-		}
-		RegisterMessageHandler(mux, cfg, st, claudeRunner)
-		RegisterOpenAIHandlers(mux, cfg, st, claudeRunner)
-	}
-	return corsMiddleware(apiKeyMiddleware(cfg.APIKey, mux))
+	return corsMiddleware(loggingMiddleware(apiKeyMiddleware(cfg.APIKey, mux)))
 }

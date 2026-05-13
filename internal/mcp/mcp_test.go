@@ -66,6 +66,15 @@ func extractMCPContent(t *testing.T, result any) string {
 	return text
 }
 
+func isToolError(result any) bool {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return false
+	}
+	isErr, _ := m["isError"].(bool)
+	return isErr
+}
+
 func TestMCP_Initialize_ReturnsServerInfo(t *testing.T) {
 	st := newMCPStore(t)
 	cfg := domain.Config{DefaultModel: "sonnet"}
@@ -161,9 +170,58 @@ func TestMCP_ToolsCall_CreateAgent_Success(t *testing.T) {
 	if !strings.Contains(content, "test-agent") {
 		t.Errorf("expected content to contain agent name, got: %s", content)
 	}
-	agents := st.ListAgents()
+	agents, err := st.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
 	if len(agents) != 1 {
 		t.Errorf("expected 1 agent in store, got %d", len(agents))
+	}
+}
+
+func TestMCP_ToolsCall_CreateAgent_MissingName(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name": "create_agent",
+		"arguments": map[string]any{
+			"system_prompt": "You are helpful.",
+		},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when name is missing")
+	}
+}
+
+func TestMCP_ToolsCall_CreateAgent_EmptyName(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name": "create_agent",
+		"arguments": map[string]any{
+			"name":          "   ",
+			"system_prompt": "You are helpful.",
+		},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when name is blank")
+	}
+}
+
+func TestMCP_ToolsCall_CreateAgent_MissingSystemPrompt(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name": "create_agent",
+		"arguments": map[string]any{
+			"name": "my-agent",
+		},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when system_prompt is missing")
 	}
 }
 
@@ -189,10 +247,21 @@ func TestMCP_ToolsCall_GetAgent_NotFound(t *testing.T) {
 		"arguments": map[string]any{"agent_id": "nonexistent-id"},
 	})
 	resp := mcp.HandleMCPRequest(req, cfg, st)
-	result, _ := resp.Result.(map[string]any)
-	isErr, _ := result["isError"].(bool)
-	if !isErr {
+	if !isToolError(resp.Result) {
 		t.Error("expected isError: true for not found agent")
+	}
+}
+
+func TestMCP_ToolsCall_GetAgent_MissingID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "get_agent",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when agent_id is missing")
 	}
 }
 
@@ -215,6 +284,19 @@ func TestMCP_ToolsCall_DeleteAgent_Success(t *testing.T) {
 	}
 }
 
+func TestMCP_ToolsCall_DeleteAgent_MissingID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "delete_agent",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when agent_id is missing")
+	}
+}
+
 func TestMCP_ToolsCall_CreateSession_Success(t *testing.T) {
 	st := newMCPStore(t)
 	cfg := domain.Config{DefaultModel: "sonnet"}
@@ -230,21 +312,46 @@ func TestMCP_ToolsCall_CreateSession_Success(t *testing.T) {
 	}
 }
 
+func TestMCP_ToolsCall_CreateSession_MissingAgentID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "create_session",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when agent_id is missing")
+	}
+}
+
+func TestMCP_ToolsCall_ListSessions_MissingAgentID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "list_sessions",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when agent_id is missing")
+	}
+}
+
 func TestMCP_ToolsCall_SendMessage_Success(t *testing.T) {
 	st := newMCPStore(t)
 	cfg := domain.Config{DefaultModel: "sonnet", WorkDir: t.TempDir()}
 	agent, _ := st.CreateAgent(domain.Agent{Name: "a", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
 	sess, _ := st.CreateSession(agent.ID, "")
-	mcp.RunnerOverride = func(ctx context.Context, c domain.Config, a *domain.Agent, sessionID, message string, resume bool, onEvent claude.StreamCallback) error {
+	mockRunner := func(ctx context.Context, c domain.Config, a *domain.Agent, sessionID, message string, resume bool, onEvent claude.StreamCallback) error {
 		data := `{"type":"result","subtype":"success","result":"mock response","session_id":"` + sessionID + `","total_cost_usd":0}`
 		return onEvent("result", []byte(data))
 	}
-	defer func() { mcp.RunnerOverride = nil }()
 	req := mcpRequest("tools/call", map[string]any{
 		"name":      "send_message",
 		"arguments": map[string]any{"session_id": sess.ID, "content": "hello"},
 	})
-	resp := mcp.HandleMCPRequest(req, cfg, st)
+	resp := mcp.HandleMCPRequestWithRunner(req, cfg, st, mockRunner)
 	content := extractMCPContent(t, resp.Result)
 	if !strings.Contains(content, "mock response") {
 		t.Errorf("expected mock response in content, got: %s", content)
@@ -259,10 +366,47 @@ func TestMCP_ToolsCall_SendMessage_SessionNotFound(t *testing.T) {
 		"arguments": map[string]any{"session_id": "ghost-session", "content": "hello"},
 	})
 	resp := mcp.HandleMCPRequest(req, cfg, st)
-	result, _ := resp.Result.(map[string]any)
-	isErr, _ := result["isError"].(bool)
-	if !isErr {
+	if !isToolError(resp.Result) {
 		t.Error("expected isError: true for unknown session")
+	}
+}
+
+func TestMCP_ToolsCall_SendMessage_MissingSessionID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "send_message",
+		"arguments": map[string]any{"content": "hello"},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when session_id is missing")
+	}
+}
+
+func TestMCP_ToolsCall_SendMessage_MissingContent(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "send_message",
+		"arguments": map[string]any{"session_id": "some-session"},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when content is missing")
+	}
+}
+
+func TestMCP_ToolsCall_GetMessages_MissingSessionID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet", WorkDir: t.TempDir()}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "get_messages",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when session_id is missing")
 	}
 }
 
@@ -282,6 +426,73 @@ func TestMCP_ToolsCall_DeleteSession_Success(t *testing.T) {
 	}
 }
 
+func TestMCP_ToolsCall_DeleteSession_MissingID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "delete_session",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when session_id is missing")
+	}
+}
+
+func TestMCP_ToolsCall_InstallAgent_MissingID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "install_agent",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when agent_id is missing")
+	}
+}
+
+func TestMCP_ToolsCall_UninstallAgent_MissingID(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "uninstall_agent",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when agent_id is missing")
+	}
+}
+
+func TestMCP_ToolsCall_GenerateAgent_MissingDescription(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "generate_agent",
+		"arguments": map[string]any{},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when description is missing")
+	}
+}
+
+func TestMCP_ToolsCall_GenerateAgent_EmptyDescription(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name": "generate_agent",
+		"arguments": map[string]any{
+			"description": "   ",
+		},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when description is blank")
+	}
+}
+
 func TestMCP_ToolsCall_UnknownTool_ReturnsIsError(t *testing.T) {
 	st := newMCPStore(t)
 	cfg := domain.Config{DefaultModel: "sonnet"}
@@ -290,9 +501,7 @@ func TestMCP_ToolsCall_UnknownTool_ReturnsIsError(t *testing.T) {
 		"arguments": map[string]any{},
 	})
 	resp := mcp.HandleMCPRequest(req, cfg, st)
-	result, _ := resp.Result.(map[string]any)
-	isErr, _ := result["isError"].(bool)
-	if !isErr {
+	if !isToolError(resp.Result) {
 		t.Error("expected isError: true for unknown tool")
 	}
 }
@@ -360,5 +569,31 @@ func TestMCP_RunMCPServer_SkipsNotifications(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) != 1 {
 		t.Errorf("expected 1 response line, got %d: %q", len(lines), output)
+	}
+}
+
+func TestMCP_RunMCPServerWithRunner_UsesInjectedRunner(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet", WorkDir: t.TempDir()}
+	agent, _ := st.CreateAgent(domain.Agent{Name: "a", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess, _ := st.CreateSession(agent.ID, "")
+
+	mockRunner := func(ctx context.Context, c domain.Config, a *domain.Agent, sessionID, message string, resume bool, onEvent claude.StreamCallback) error {
+		data := `{"type":"result","subtype":"success","result":"injected runner response","session_id":"` + sessionID + `","total_cost_usd":0}`
+		return onEvent("result", []byte(data))
+	}
+
+	req, _ := json.Marshal(mcpRequest("tools/call", map[string]any{
+		"name":      "send_message",
+		"arguments": map[string]any{"session_id": sess.ID, "content": "ping"},
+	}))
+	reader := strings.NewReader(string(req) + "\n")
+	var buf strings.Builder
+	err := mcp.RunMCPServerWithRunner(cfg, st, reader, &buf, mockRunner)
+	if err != nil {
+		t.Fatalf("RunMCPServerWithRunner returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "injected runner response") {
+		t.Errorf("expected injected runner response in output, got: %s", buf.String())
 	}
 }

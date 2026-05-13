@@ -131,7 +131,10 @@ func TestStore_GetAgent_Found(t *testing.T) {
 
 func TestStore_ListAgents_Empty(t *testing.T) {
 	s := newTestStore(t)
-	agents := s.ListAgents()
+	agents, err := s.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
 	if len(agents) != 0 {
 		t.Errorf("expected 0 agents, got %d", len(agents))
 	}
@@ -141,7 +144,10 @@ func TestStore_ListAgents_Multiple(t *testing.T) {
 	s := newTestStore(t)
 	s.CreateAgent(domain.Agent{Name: "a1", SystemPrompt: "sp1", Model: "sonnet"}, "sonnet")
 	s.CreateAgent(domain.Agent{Name: "a2", SystemPrompt: "sp2", Model: "haiku"}, "sonnet")
-	agents := s.ListAgents()
+	agents, err := s.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
 	if len(agents) != 2 {
 		t.Errorf("expected 2 agents, got %d", len(agents))
 	}
@@ -249,7 +255,10 @@ func TestStore_ListSessionsByAgent(t *testing.T) {
 	s.CreateSession(a1.ID, "s1")
 	s.CreateSession(a1.ID, "s2")
 	s.CreateSession(a2.ID, "s3")
-	sessions := s.ListSessionsByAgent(a1.ID)
+	sessions, err := s.ListSessionsByAgent(a1.ID)
+	if err != nil {
+		t.Fatalf("ListSessionsByAgent: %v", err)
+	}
 	if len(sessions) != 2 {
 		t.Errorf("expected 2 sessions for a1, got %d", len(sessions))
 	}
