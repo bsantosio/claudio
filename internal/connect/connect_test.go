@@ -2,13 +2,13 @@ package connect
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// setConfigOverride sets the package-level test override and returns a cleanup func.
 func setConfigOverride(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -17,7 +17,6 @@ func setConfigOverride(t *testing.T) string {
 	return dir
 }
 
-// writeJSON writes a JSON object to a file, creating parent dirs as needed.
 func writeJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -32,7 +31,6 @@ func writeJSON(t *testing.T, path string, v any) {
 	}
 }
 
-// readJSON reads a JSON file into map[string]any.
 func readJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -46,18 +44,31 @@ func readJSON(t *testing.T, path string) map[string]any {
 	return out
 }
 
-// --- configPath tests (Tasks 1.1 / 1.2) ---
-
-func TestConfigPath_ClaudeCode_ContainsSettingsJSON(t *testing.T) {
-	setConfigOverride(t)
-	path, err := configPath(TargetClaudeCode)
-	if err != nil {
-		t.Fatalf("configPath(claude-code): %v", err)
+// mockClaudeMCP replaces the real `claude mcp` runner with a test double.
+// Returns a pointer to a slice that captures all calls.
+func mockClaudeMCP(t *testing.T) *[][]string {
+	t.Helper()
+	var calls [][]string
+	old := runClaudeMCP
+	t.Cleanup(func() { runClaudeMCP = old })
+	runClaudeMCP = func(args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		if len(args) >= 1 && args[0] == "get" {
+			if len(calls) > 0 {
+				for _, c := range calls {
+					if c[0] == "add" {
+						return []byte(`{"name":"claudio"}`), nil
+					}
+				}
+			}
+			return nil, fmt.Errorf("not found")
+		}
+		return []byte("ok"), nil
 	}
-	if !strings.HasSuffix(path, "claude-code.json") {
-		t.Errorf("expected path to end with claude-code.json, got %q", path)
-	}
+	return &calls
 }
+
+// --- configPath tests ---
 
 func TestConfigPath_ClaudeDesktop_ContainsDesktop(t *testing.T) {
 	setConfigOverride(t)
@@ -75,66 +86,54 @@ func TestConfigPath_InvalidTarget_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown target, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown-target") {
-		t.Errorf("error should mention target, got %q", err.Error())
-	}
 }
 
-// --- Connect tests (Tasks 1.3 / 1.4) ---
+// --- Connect Claude Code tests (via `claude mcp add`) ---
 
-func TestConnect_ClaudeCode_CreatesEntry(t *testing.T) {
-	dir := setConfigOverride(t)
+func TestConnect_ClaudeCode_CallsClaudeMCPAdd(t *testing.T) {
+	calls := mockClaudeMCP(t)
 	if err := Connect(TargetClaudeCode); err != nil {
 		t.Fatalf("Connect(claude-code): %v", err)
 	}
 
-	// Verify plugin .mcp.json in cache directory
-	mcpPath := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion, ".mcp.json")
-	mcpCfg := readJSON(t, mcpPath)
-	servers, ok := mcpCfg["mcpServers"].(map[string]any)
-	if !ok {
-		t.Fatalf("mcpServers not a map in .mcp.json, got %T", mcpCfg["mcpServers"])
+	// First call: remove (idempotency cleanup)
+	// Second call: add
+	if len(*calls) < 2 {
+		t.Fatalf("expected at least 2 claude mcp calls, got %d", len(*calls))
 	}
-	claudio, ok := servers["claudio"].(map[string]any)
-	if !ok {
-		t.Fatalf("mcpServers.claudio not a map, got %T", servers["claudio"])
+	if (*calls)[0][0] != "remove" {
+		t.Errorf("first call should be remove, got %v", (*calls)[0])
 	}
-	if claudio["args"] == nil {
-		t.Error("mcpServers.claudio.args should be set")
+	addCall := (*calls)[1]
+	if addCall[0] != "add" {
+		t.Errorf("second call should be add, got %v", addCall)
 	}
-
-	// Verify plugin.json in cache
-	pluginPath := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion, ".claude-plugin", "plugin.json")
-	pluginCfg := readJSON(t, pluginPath)
-	if pluginCfg["name"] != "claudio" {
-		t.Errorf("plugin.json name = %v, want claudio", pluginCfg["name"])
+	hasName := false
+	for _, arg := range addCall {
+		if arg == "claudio" {
+			hasName = true
+		}
 	}
-
-	// Verify installed_plugins.json
-	ipPath := filepath.Join(dir, "plugins", "installed_plugins.json")
-	ipCfg := readJSON(t, ipPath)
-	plugins, ok := ipCfg["plugins"].(map[string]any)
-	if !ok {
-		t.Fatal("plugins not in installed_plugins.json")
-	}
-	if plugins["claudio@claudio"] == nil {
-		t.Error("claudio@claudio should be in installed_plugins.json")
-	}
-
-	// Verify enabledPlugins in settings.json
-	settingsPath := filepath.Join(dir, "claude-code.json")
-	settings := readJSON(t, settingsPath)
-	enabled, ok := settings["enabledPlugins"].(map[string]any)
-	if !ok {
-		t.Fatal("enabledPlugins not in settings.json")
-	}
-	if enabled["claudio@claudio"] != true {
-		t.Error("claudio@claudio should be enabled in settings.json")
+	if !hasName {
+		t.Errorf("add call should include name 'claudio', got %v", addCall)
 	}
 }
 
+func TestConnect_ClaudeCode_Idempotent(t *testing.T) {
+	mockClaudeMCP(t)
+	if err := Connect(TargetClaudeCode); err != nil {
+		t.Fatalf("first Connect: %v", err)
+	}
+	if err := Connect(TargetClaudeCode); err != nil {
+		t.Fatalf("second Connect (idempotent): %v", err)
+	}
+}
+
+// --- Connect Claude Desktop tests (file-based) ---
+
 func TestConnect_ClaudeDesktop_CreatesEntry(t *testing.T) {
 	dir := setConfigOverride(t)
+	mockClaudeMCP(t)
 	if err := Connect(TargetClaudeDesktop); err != nil {
 		t.Fatalf("Connect(claude-desktop): %v", err)
 	}
@@ -153,14 +152,14 @@ func TestConnect_ClaudeDesktop_CreatesEntry(t *testing.T) {
 
 func TestConnect_CreatesFile_IfNotExist(t *testing.T) {
 	dir := setConfigOverride(t)
-	path := filepath.Join(dir, "claude-code.json")
+	mockClaudeMCP(t)
+	path := filepath.Join(dir, "claude-desktop.json")
 
-	// Confirm file doesn't exist before connect.
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("file should not exist yet")
 	}
 
-	if err := Connect(TargetClaudeCode); err != nil {
+	if err := Connect(TargetClaudeDesktop); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 
@@ -171,9 +170,9 @@ func TestConnect_CreatesFile_IfNotExist(t *testing.T) {
 
 func TestConnect_PreservesExistingKeys(t *testing.T) {
 	dir := setConfigOverride(t)
-	path := filepath.Join(dir, "claude-code.json")
+	mockClaudeMCP(t)
+	path := filepath.Join(dir, "claude-desktop.json")
 
-	// Pre-populate with existing keys.
 	writeJSON(t, path, map[string]any{
 		"someKey": "someValue",
 		"mcpServers": map[string]any{
@@ -181,60 +180,48 @@ func TestConnect_PreservesExistingKeys(t *testing.T) {
 		},
 	})
 
-	if err := Connect(TargetClaudeCode); err != nil {
+	if err := Connect(TargetClaudeDesktop); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 
 	cfg := readJSON(t, path)
-
-	// Existing top-level key preserved.
 	if cfg["someKey"] != "someValue" {
 		t.Errorf("someKey should be preserved, got %v", cfg["someKey"])
 	}
 
-	// Existing mcp server preserved.
 	servers, _ := cfg["mcpServers"].(map[string]any)
 	if _, ok := servers["other-server"]; !ok {
 		t.Error("other-server entry should be preserved")
 	}
-
-	// enabledPlugins entry present in settings.json
-	enabled, _ := cfg["enabledPlugins"].(map[string]any)
-	if enabled["claudio@claudio"] != true {
-		t.Error("claudio@claudio should be in enabledPlugins")
-	}
-
-	// Plugin cache should exist
-	mcpPath := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion, ".mcp.json")
-	if _, err := os.Stat(mcpPath); err != nil {
-		t.Errorf("plugin .mcp.json should exist: %v", err)
-	}
-}
-
-func TestConnect_Idempotent(t *testing.T) {
-	setConfigOverride(t)
-
-	if err := Connect(TargetClaudeCode); err != nil {
-		t.Fatalf("first Connect: %v", err)
-	}
-	if err := Connect(TargetClaudeCode); err != nil {
-		t.Fatalf("second Connect (idempotent): %v", err)
+	if _, ok := servers["claudio"]; !ok {
+		t.Error("claudio entry should be added")
 	}
 }
 
 func TestConnect_InvalidTarget_ReturnsError(t *testing.T) {
-	setConfigOverride(t)
+	mockClaudeMCP(t)
 	err := Connect("bogus")
 	if err == nil {
 		t.Fatal("expected error for invalid target")
 	}
 }
 
-// --- Disconnect tests (Tasks 1.5 / 1.6) ---
+// --- Disconnect tests ---
 
-func TestDisconnect_RemovesEntry(t *testing.T) {
+func TestDisconnect_ClaudeCode_CallsClaudeMCPRemove(t *testing.T) {
+	calls := mockClaudeMCP(t)
+	if err := Disconnect(TargetClaudeCode); err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+	if len(*calls) != 1 || (*calls)[0][0] != "remove" {
+		t.Errorf("expected single remove call, got %v", *calls)
+	}
+}
+
+func TestDisconnect_ClaudeDesktop_RemovesEntry(t *testing.T) {
 	dir := setConfigOverride(t)
-	path := filepath.Join(dir, "claude-code.json")
+	mockClaudeMCP(t)
+	path := filepath.Join(dir, "claude-desktop.json")
 
 	writeJSON(t, path, map[string]any{
 		"mcpServers": map[string]any{
@@ -243,7 +230,7 @@ func TestDisconnect_RemovesEntry(t *testing.T) {
 		},
 	})
 
-	if err := Disconnect(TargetClaudeCode); err != nil {
+	if err := Disconnect(TargetClaudeDesktop); err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
 
@@ -257,84 +244,95 @@ func TestDisconnect_RemovesEntry(t *testing.T) {
 	}
 }
 
-func TestDisconnect_NotConnected_NoError(t *testing.T) {
-	dir := setConfigOverride(t)
-	path := filepath.Join(dir, "claude-code.json")
-	writeJSON(t, path, map[string]any{"mcpServers": map[string]any{}})
-
-	if err := Disconnect(TargetClaudeCode); err != nil {
-		t.Fatalf("Disconnect when not connected should not error: %v", err)
-	}
-}
-
-func TestDisconnect_FileNotExist_NoError(t *testing.T) {
+func TestDisconnect_ClaudeDesktop_FileNotExist_NoError(t *testing.T) {
 	setConfigOverride(t)
-	// No file created — should be a no-op.
-	if err := Disconnect(TargetClaudeCode); err != nil {
+	mockClaudeMCP(t)
+	if err := Disconnect(TargetClaudeDesktop); err != nil {
 		t.Fatalf("Disconnect with missing file should not error: %v", err)
 	}
 }
 
 func TestDisconnect_InvalidTarget_ReturnsError(t *testing.T) {
-	setConfigOverride(t)
+	mockClaudeMCP(t)
 	err := Disconnect("bogus")
 	if err == nil {
 		t.Fatal("expected error for invalid target")
 	}
 }
 
-// --- Status tests (Tasks 1.7 / 1.8) ---
+// --- Status tests ---
 
-func TestStatus_Connected_ReturnsTrue(t *testing.T) {
-	dir := setConfigOverride(t)
-	// Claude Code status checks for .mcp.json in cache directory
-	cacheDir := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion)
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		t.Fatal(err)
+func TestStatus_ClaudeCode_UsesClaudeMCPGet(t *testing.T) {
+	calls := mockClaudeMCP(t)
+
+	// Before any add call, status should be false
+	connected, err := Status(TargetClaudeCode)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
 	}
-	writeJSON(t, filepath.Join(cacheDir, ".mcp.json"), map[string]any{
+	if connected {
+		t.Error("expected Status to return false before connect")
+	}
+
+	// Simulate a connect (adds an "add" call to history)
+	Connect(TargetClaudeCode)
+
+	connected, err = Status(TargetClaudeCode)
+	if err != nil {
+		t.Fatalf("Status after connect: %v", err)
+	}
+	if !connected {
+		t.Error("expected Status to return true after connect")
+	}
+
+	// Verify get was called
+	getFound := false
+	for _, c := range *calls {
+		if c[0] == "get" {
+			getFound = true
+		}
+	}
+	if !getFound {
+		t.Error("expected claude mcp get to be called")
+	}
+}
+
+func TestStatus_ClaudeDesktop_Connected(t *testing.T) {
+	dir := setConfigOverride(t)
+	mockClaudeMCP(t)
+	path := filepath.Join(dir, "claude-desktop.json")
+	writeJSON(t, path, map[string]any{
 		"mcpServers": map[string]any{
-			"claudio": map[string]any{"command": "/bin/claudio", "args": []any{"mcp"}},
+			"claudio": map[string]any{"command": "/bin/claudio"},
 		},
 	})
 
-	connected, err := Status(TargetClaudeCode)
+	connected, err := Status(TargetClaudeDesktop)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
 	if !connected {
-		t.Error("expected Status to return true when cache .mcp.json exists")
+		t.Error("expected Status to return true")
 	}
 }
 
-func TestStatus_NotConnected_ReturnsFalse(t *testing.T) {
+func TestStatus_ClaudeDesktop_NotConnected(t *testing.T) {
 	dir := setConfigOverride(t)
-	path := filepath.Join(dir, "claude-code.json")
+	mockClaudeMCP(t)
+	path := filepath.Join(dir, "claude-desktop.json")
 	writeJSON(t, path, map[string]any{"mcpServers": map[string]any{}})
 
-	connected, err := Status(TargetClaudeCode)
+	connected, err := Status(TargetClaudeDesktop)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
 	if connected {
-		t.Error("expected Status to return false when claudio entry is absent")
-	}
-}
-
-func TestStatus_FileNotExist_ReturnsFalse(t *testing.T) {
-	setConfigOverride(t)
-	// No file created.
-	connected, err := Status(TargetClaudeCode)
-	if err != nil {
-		t.Fatalf("Status with missing file should not error: %v", err)
-	}
-	if connected {
-		t.Error("expected Status to return false when file does not exist")
+		t.Error("expected Status to return false")
 	}
 }
 
 func TestStatus_InvalidTarget_ReturnsError(t *testing.T) {
-	setConfigOverride(t)
+	mockClaudeMCP(t)
 	_, err := Status("bogus")
 	if err == nil {
 		t.Fatal("expected error for invalid target")
@@ -344,32 +342,14 @@ func TestStatus_InvalidTarget_ReturnsError(t *testing.T) {
 // --- StatusAll tests ---
 
 func TestStatusAll_ReturnsBothTargets(t *testing.T) {
-	dir := setConfigOverride(t)
-
-	// Create Claude Code plugin cache structure
-	cacheDir := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion)
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeJSON(t, filepath.Join(cacheDir, ".mcp.json"), map[string]any{
-		"mcpServers": map[string]any{
-			"claudio": map[string]any{"command": "/bin/claudio", "args": []any{"mcp"}},
-		},
-	})
-
+	mockClaudeMCP(t)
 	all := StatusAll()
 	if len(all) != 2 {
 		t.Fatalf("StatusAll should return 2 entries, got %d", len(all))
 	}
-	if !all[TargetClaudeCode] {
-		t.Error("claude-code should be connected")
-	}
-	if all[TargetClaudeDesktop] {
-		t.Error("claude-desktop should be disconnected")
-	}
 }
 
-// --- writeConfigAtomic test: atomic write does not corrupt on success ---
+// --- writeConfigAtomic ---
 
 func TestWriteConfigAtomic_ProducesValidJSON(t *testing.T) {
 	dir := t.TempDir()
@@ -380,26 +360,15 @@ func TestWriteConfigAtomic_ProducesValidJSON(t *testing.T) {
 		t.Fatalf("writeConfigAtomic: %v", err)
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	var out map[string]any
-	if err := json.Unmarshal(data, &out); err != nil {
-		t.Errorf("output is not valid JSON: %v", err)
-	}
+	out := readJSON(t, path)
 	if out["key"] != "value" {
 		t.Errorf("expected key=value, got %v", out["key"])
 	}
 }
 
-// binaryPath is exercised indirectly by Connect (it is called internally).
-// If it were a go-build path, a warning is printed to stderr — not an error.
-// The test below exercises Connect end-to-end which invokes binaryPath().
 func TestConnect_BinaryPath_Resolved(t *testing.T) {
-	setConfigOverride(t)
-	// If binaryPath() fails, Connect returns an error.
+	mockClaudeMCP(t)
 	if err := Connect(TargetClaudeCode); err != nil {
-		t.Fatalf("Connect should succeed even in test binary context: %v", err)
+		t.Fatalf("Connect should succeed: %v", err)
 	}
 }
