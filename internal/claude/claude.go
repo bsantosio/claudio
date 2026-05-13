@@ -78,7 +78,6 @@ func BuildClaudeArgs(agent *domain.Agent, sessionID, message string, resume bool
 	} else {
 		args = append(args, "--session-id", sessionID, "--system-prompt", agent.SystemPrompt)
 	}
-	args = append(args, "--", message)
 	if len(agent.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(agent.AllowedTools, ","))
 	}
@@ -91,6 +90,7 @@ func BuildClaudeArgs(agent *domain.Agent, sessionID, message string, resume bool
 	if agent.PermissionMode != "" {
 		args = append(args, "--permission-mode", agent.PermissionMode)
 	}
+	args = append(args, "--", message)
 	return args
 }
 
@@ -108,9 +108,11 @@ func RunClaude(ctx context.Context, cfg domain.Config, agent *domain.Agent, sess
 			return fmt.Errorf("write mcp config: %w", err)
 		}
 		tmpFile.Close()
-		last := args[len(args)-1]
-		args = args[:len(args)-1]
-		args = append(args, "--mcp-config", tmpFile.Name(), last)
+		// Insert --mcp-config before the "--" message separator (last 2 elements)
+		sep := args[len(args)-2] // "--"
+		msg := args[len(args)-1] // message
+		args = args[:len(args)-2]
+		args = append(args, "--mcp-config", tmpFile.Name(), sep, msg)
 	}
 	log.Printf("claude args: %v", args)
 	cmd := exec.CommandContext(ctx, "claude", args...)
