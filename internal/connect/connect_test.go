@@ -88,8 +88,8 @@ func TestConnect_ClaudeCode_CreatesEntry(t *testing.T) {
 		t.Fatalf("Connect(claude-code): %v", err)
 	}
 
-	// Verify plugin .mcp.json was created
-	mcpPath := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code", ".mcp.json")
+	// Verify plugin .mcp.json in cache directory
+	mcpPath := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion, ".mcp.json")
 	mcpCfg := readJSON(t, mcpPath)
 	servers, ok := mcpCfg["mcpServers"].(map[string]any)
 	if !ok {
@@ -103,11 +103,22 @@ func TestConnect_ClaudeCode_CreatesEntry(t *testing.T) {
 		t.Error("mcpServers.claudio.args should be set")
 	}
 
-	// Verify plugin.json was created
-	pluginPath := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code", ".claude-plugin", "plugin.json")
+	// Verify plugin.json in cache
+	pluginPath := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion, ".claude-plugin", "plugin.json")
 	pluginCfg := readJSON(t, pluginPath)
 	if pluginCfg["name"] != "claudio" {
 		t.Errorf("plugin.json name = %v, want claudio", pluginCfg["name"])
+	}
+
+	// Verify installed_plugins.json
+	ipPath := filepath.Join(dir, "plugins", "installed_plugins.json")
+	ipCfg := readJSON(t, ipPath)
+	plugins, ok := ipCfg["plugins"].(map[string]any)
+	if !ok {
+		t.Fatal("plugins not in installed_plugins.json")
+	}
+	if plugins["claudio@claudio"] == nil {
+		t.Error("claudio@claudio should be in installed_plugins.json")
 	}
 
 	// Verify enabledPlugins in settings.json
@@ -187,10 +198,16 @@ func TestConnect_PreservesExistingKeys(t *testing.T) {
 		t.Error("other-server entry should be preserved")
 	}
 
-	// enabledPlugins entry present.
+	// enabledPlugins entry present in settings.json
 	enabled, _ := cfg["enabledPlugins"].(map[string]any)
 	if enabled["claudio@claudio"] != true {
 		t.Error("claudio@claudio should be in enabledPlugins")
+	}
+
+	// Plugin cache should exist
+	mcpPath := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion, ".mcp.json")
+	if _, err := os.Stat(mcpPath); err != nil {
+		t.Errorf("plugin .mcp.json should exist: %v", err)
 	}
 }
 
@@ -270,12 +287,12 @@ func TestDisconnect_InvalidTarget_ReturnsError(t *testing.T) {
 
 func TestStatus_Connected_ReturnsTrue(t *testing.T) {
 	dir := setConfigOverride(t)
-	// Claude Code status checks for plugin .mcp.json file
-	pluginDir := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+	// Claude Code status checks for .mcp.json in cache directory
+	cacheDir := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeJSON(t, filepath.Join(pluginDir, ".mcp.json"), map[string]any{
+	writeJSON(t, filepath.Join(cacheDir, ".mcp.json"), map[string]any{
 		"mcpServers": map[string]any{
 			"claudio": map[string]any{"command": "/bin/claudio", "args": []any{"mcp"}},
 		},
@@ -286,7 +303,7 @@ func TestStatus_Connected_ReturnsTrue(t *testing.T) {
 		t.Fatalf("Status: %v", err)
 	}
 	if !connected {
-		t.Error("expected Status to return true when plugin .mcp.json exists")
+		t.Error("expected Status to return true when cache .mcp.json exists")
 	}
 }
 
@@ -329,12 +346,12 @@ func TestStatus_InvalidTarget_ReturnsError(t *testing.T) {
 func TestStatusAll_ReturnsBothTargets(t *testing.T) {
 	dir := setConfigOverride(t)
 
-	// Create Claude Code plugin structure
-	pluginDir := filepath.Join(dir, "plugins", "marketplaces", "claudio", "plugin", "claude-code")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+	// Create Claude Code plugin cache structure
+	cacheDir := filepath.Join(dir, "plugins", "cache", "claudio", "claudio", pluginVersion)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeJSON(t, filepath.Join(pluginDir, ".mcp.json"), map[string]any{
+	writeJSON(t, filepath.Join(cacheDir, ".mcp.json"), map[string]any{
 		"mcpServers": map[string]any{
 			"claudio": map[string]any{"command": "/bin/claudio", "args": []any{"mcp"}},
 		},

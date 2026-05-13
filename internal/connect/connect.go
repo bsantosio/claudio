@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
+
+var timeNow = time.Now
 
 // Target identifiers for supported Claude products.
 const (
@@ -66,13 +69,24 @@ func configPath(target string) (string, error) {
 	}
 }
 
-// pluginDir returns the path to claudio's plugin directory for Claude Code.
-func pluginDir() (string, error) {
+const pluginVersion = "0.1.0"
+
+// pluginCacheDir returns the path to claudio's plugin cache directory.
+func pluginCacheDir() (string, error) {
 	ch, err := claudeHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(ch, "plugins", "marketplaces", pluginName, "plugin", "claude-code"), nil
+	return filepath.Join(ch, "plugins", "cache", pluginName, pluginName, pluginVersion), nil
+}
+
+// installedPluginsPath returns the path to installed_plugins.json.
+func installedPluginsPath() (string, error) {
+	ch, err := claudeHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(ch, "plugins", "installed_plugins.json"), nil
 }
 
 // findBinary returns the absolute path of the running executable,
@@ -181,22 +195,22 @@ func Connect(target string) error {
 }
 
 func connectClaudeCode(bin string) error {
-	pdir, err := pluginDir()
+	cacheDir, err := pluginCacheDir()
 	if err != nil {
 		return err
 	}
 
-	// Create plugin directory structure
-	pluginMetaDir := filepath.Join(pdir, ".claude-plugin")
+	// Create plugin cache directory structure
+	pluginMetaDir := filepath.Join(cacheDir, ".claude-plugin")
 	if err := os.MkdirAll(pluginMetaDir, 0o755); err != nil {
 		return fmt.Errorf("connect: create plugin dir: %w", err)
 	}
 
-	// Write plugin.json
+	// Write .claude-plugin/plugin.json
 	pluginJSON := map[string]any{
 		"name":        pluginName,
 		"description": "Claude CLI proxy — manage AI agents with persistent sessions over your Claude subscription.",
-		"version":     "0.1.0",
+		"version":     pluginVersion,
 		"author":      map[string]any{"name": "claudio"},
 		"license":     "MIT",
 	}
@@ -217,11 +231,47 @@ func connectClaudeCode(bin string) error {
 	}
 	mcpData, _ := json.MarshalIndent(mcpJSON, "", "  ")
 	mcpData = append(mcpData, '\n')
-	if err := os.WriteFile(filepath.Join(pdir, ".mcp.json"), mcpData, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cacheDir, ".mcp.json"), mcpData, 0o644); err != nil {
 		return fmt.Errorf("connect: write .mcp.json: %w", err)
 	}
 
-	// Enable plugin in settings.json
+	// Register in installed_plugins.json
+	ipPath, err := installedPluginsPath()
+	if err != nil {
+		return err
+	}
+	ipData, err := os.ReadFile(ipPath)
+	var ip map[string]any
+	if err != nil {
+		ip = map[string]any{"version": float64(2), "plugins": map[string]any{}}
+	} else {
+		if err := json.Unmarshal(ipData, &ip); err != nil {
+			ip = map[string]any{"version": float64(2), "plugins": map[string]any{}}
+		}
+	}
+	pluginsRaw, _ := ip["plugins"].(map[string]any)
+	if pluginsRaw == nil {
+		pluginsRaw = map[string]any{}
+	}
+	pluginKey := pluginName + "@" + pluginName
+	now := fmt.Sprintf("%04d-%02d-%02dT%02d:%02d:%02d.000Z",
+		timeNow().Year(), timeNow().Month(), timeNow().Day(),
+		timeNow().Hour(), timeNow().Minute(), timeNow().Second())
+	pluginsRaw[pluginKey] = []any{
+		map[string]any{
+			"scope":       "user",
+			"installPath": cacheDir,
+			"version":     pluginVersion,
+			"installedAt": now,
+			"lastUpdated": now,
+		},
+	}
+	ip["plugins"] = pluginsRaw
+	if err := writeConfigAtomic(ipPath, ip); err != nil {
+		return fmt.Errorf("connect: update installed_plugins.json: %w", err)
+	}
+
+	// Enable in settings.json
 	settingsPath, err := configPath(TargetClaudeCode)
 	if err != nil {
 		return err
@@ -231,41 +281,17 @@ func connectClaudeCode(bin string) error {
 		return err
 	}
 
-	// Add to enabledPlugins
-	enabledRaw, ok := cfg["enabledPlugins"]
-	if !ok {
+	enabledRaw, _ := cfg["enabledPlugins"].(map[string]any)
+	if enabledRaw == nil {
 		enabledRaw = map[string]any{}
 	}
-	enabled, ok := enabledRaw.(map[string]any)
-	if !ok {
-		enabled = map[string]any{}
-	}
-	enabled[pluginName+"@"+pluginName] = true
-	cfg["enabledPlugins"] = enabled
+	enabledRaw[pluginKey] = true
+	cfg["enabledPlugins"] = enabledRaw
 
-	// Add to extraKnownMarketplaces
-	mktsRaw, ok := cfg["extraKnownMarketplaces"]
-	if !ok {
-		mktsRaw = map[string]any{}
-	}
-	mkts, ok := mktsRaw.(map[string]any)
-	if !ok {
-		mkts = map[string]any{}
-	}
-	mkts[pluginName] = map[string]any{
-		"source": map[string]any{
-			"repo":   "bsantosio/claudio",
-			"source": "github",
-		},
-	}
-	cfg["extraKnownMarketplaces"] = mkts
-
-	// Remove from mcpServers if previously added there (cleanup old approach)
-	if mcpRaw, ok := cfg["mcpServers"]; ok {
-		if mcp, ok := mcpRaw.(map[string]any); ok {
-			delete(mcp, pluginName)
-			cfg["mcpServers"] = mcp
-		}
+	// Cleanup old mcpServers entry if present
+	if mcpRaw, ok := cfg["mcpServers"].(map[string]any); ok {
+		delete(mcpRaw, pluginName)
+		cfg["mcpServers"] = mcpRaw
 	}
 
 	return writeConfigAtomic(settingsPath, cfg)
@@ -316,18 +342,44 @@ func Disconnect(target string) error {
 }
 
 func disconnectClaudeCode() error {
-	// Remove plugin directory
-	pdir, err := pluginDir()
+	// Remove plugin cache directory
+	cacheDir, err := pluginCacheDir()
 	if err != nil {
 		return err
 	}
-	// Go up to the marketplace root: plugins/marketplaces/claudio/
-	marketplaceDir := filepath.Dir(filepath.Dir(filepath.Dir(pdir)))
-	if err := os.RemoveAll(marketplaceDir); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("connect: remove plugin dir: %w", err)
+	// Remove the claudio dir under cache: cache/claudio/
+	claudioCacheRoot := filepath.Dir(filepath.Dir(cacheDir))
+	if err := os.RemoveAll(claudioCacheRoot); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("connect: remove plugin cache: %w", err)
 	}
 
-	// Remove from enabledPlugins and extraKnownMarketplaces in settings.json
+	// Also remove old marketplace dir if it exists
+	ch, err := claudeHome()
+	if err != nil {
+		return err
+	}
+	oldMarketplaceDir := filepath.Join(ch, "plugins", "marketplaces", pluginName)
+	os.RemoveAll(oldMarketplaceDir) //nolint:errcheck — best-effort cleanup
+
+	// Remove from installed_plugins.json
+	pluginKey := pluginName + "@" + pluginName
+	ipPath, err := installedPluginsPath()
+	if err != nil {
+		return err
+	}
+	ipData, err := os.ReadFile(ipPath)
+	if err == nil {
+		var ip map[string]any
+		if json.Unmarshal(ipData, &ip) == nil {
+			if plugins, ok := ip["plugins"].(map[string]any); ok {
+				delete(plugins, pluginKey)
+				ip["plugins"] = plugins
+				writeConfigAtomic(ipPath, ip) //nolint:errcheck
+			}
+		}
+	}
+
+	// Remove from enabledPlugins in settings.json
 	settingsPath, err := configPath(TargetClaudeCode)
 	if err != nil {
 		return err
@@ -340,24 +392,13 @@ func disconnectClaudeCode() error {
 		return nil
 	}
 
-	if enabledRaw, ok := cfg["enabledPlugins"]; ok {
-		if enabled, ok := enabledRaw.(map[string]any); ok {
-			delete(enabled, pluginName+"@"+pluginName)
-			cfg["enabledPlugins"] = enabled
-		}
+	if enabled, ok := cfg["enabledPlugins"].(map[string]any); ok {
+		delete(enabled, pluginKey)
+		cfg["enabledPlugins"] = enabled
 	}
-	if mktsRaw, ok := cfg["extraKnownMarketplaces"]; ok {
-		if mkts, ok := mktsRaw.(map[string]any); ok {
-			delete(mkts, pluginName)
-			cfg["extraKnownMarketplaces"] = mkts
-		}
-	}
-	// Also clean up mcpServers if old approach left an entry
-	if mcpRaw, ok := cfg["mcpServers"]; ok {
-		if mcp, ok := mcpRaw.(map[string]any); ok {
-			delete(mcp, pluginName)
-			cfg["mcpServers"] = mcp
-		}
+	if mcpRaw, ok := cfg["mcpServers"].(map[string]any); ok {
+		delete(mcpRaw, pluginName)
+		cfg["mcpServers"] = mcpRaw
 	}
 
 	return writeConfigAtomic(settingsPath, cfg)
@@ -398,11 +439,11 @@ func disconnectClaudeDesktop() error {
 func Status(target string) (bool, error) {
 	switch target {
 	case TargetClaudeCode:
-		pdir, err := pluginDir()
+		cacheDir, err := pluginCacheDir()
 		if err != nil {
 			return false, err
 		}
-		_, err = os.Stat(filepath.Join(pdir, ".mcp.json"))
+		_, err = os.Stat(filepath.Join(cacheDir, ".mcp.json"))
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
