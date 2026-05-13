@@ -68,7 +68,7 @@ func mcpTools() []map[string]any {
 	tools := []mcpTool{
 		{
 			Name:        "create_agent",
-			Description: "Create a specialized AI agent with a custom system prompt, model, and tool configuration",
+			Description: "Create a specialized AI agent with a custom system prompt, model, and tool configuration. Use list_templates first to see pre-built agents. The system_prompt defines the agent's behavior — structure it with sections: Purpose, Constraints, Workflow, Examples.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -87,11 +87,13 @@ func mcpTools() []map[string]any {
 		{Name: "delete_agent", Description: "Delete an agent (must have no active sessions)", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string", "description": "Agent ID"}}, "required": []string{"agent_id"}}},
 		{Name: "create_session", Description: "Create a new conversation session for an agent", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string", "description": "Agent ID to create session for"}, "name": map[string]any{"type": "string", "description": "Optional session name"}}, "required": []string{"agent_id"}}},
 		{Name: "list_sessions", Description: "List all sessions for an agent", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string", "description": "Agent ID"}}, "required": []string{"agent_id"}}},
-		{Name: "send_message", Description: "Send a message to a session and get the AI response. The agent processes the message using Claude CLI with its configured tools and permissions.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "description": "Session ID"}, "content": map[string]any{"type": "string", "description": "Message content to send"}}, "required": []string{"session_id", "content"}}},
-		{Name: "get_messages", Description: "Get the message history for a session", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "description": "Session ID"}}, "required": []string{"session_id"}}},
+		{Name: "send_message", Description: "Send a message to a session and get the AI response. The agent processes the message using Claude CLI with its configured system prompt, tools, and permissions. Returns the full response text. Use for multi-turn conversations — the session maintains context across messages.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "description": "Session ID"}, "content": map[string]any{"type": "string", "description": "Message content to send"}}, "required": []string{"session_id", "content"}}},
+		{Name: "get_messages", Description: "Get the conversation history for a session. Messages are read from Claude CLI's session JSONL files. Returns an array of {role, content} objects in chronological order.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "description": "Session ID"}}, "required": []string{"session_id"}}},
 		{Name: "delete_session", Description: "Delete a conversation session", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"session_id": map[string]any{"type": "string", "description": "Session ID"}}, "required": []string{"session_id"}}},
-		{Name: "install_agent", Description: "Install an agent to Claude Code by generating a .md file in .claude/agents/. After installation, the agent is available as a sub-agent in Claude Code.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string", "description": "Agent ID to install"}}, "required": []string{"agent_id"}}},
+		{Name: "install_agent", Description: "Install an agent to Claude Code by generating a .md file in .claude/agents/. After installation, the agent is available as a sub-agent in Claude Code (invoked with @agent-name). The file includes the model config, allowed tools, and the full system prompt.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string", "description": "Agent ID to install"}}, "required": []string{"agent_id"}}},
 		{Name: "uninstall_agent", Description: "Remove an agent from Claude Code by deleting its .md file from .claude/agents/.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string", "description": "Agent ID to uninstall"}}, "required": []string{"agent_id"}}},
+		{Name: "list_templates", Description: "List pre-built agent templates with recommended system prompts, models, and tools. Use this to discover ready-made agents before creating custom ones.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}},
+		{Name: "generate_agent", Description: "Generate an agent configuration using AI. Describe what you want the agent to do in natural language, and Claude will create an optimized agent config with the best system prompt, model, and tools. Review the result before creating.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"description": map[string]any{"type": "string", "description": "Natural language description of what you want the agent to do"}}, "required": []string{"description"}}},
 	}
 	result := make([]map[string]any, len(tools))
 	for i, t := range tools {
@@ -114,7 +116,7 @@ func HandleMCPRequest(req JSONRPCRequest, cfg domain.Config, st *store.Store) *J
 			"serverInfo": map[string]any{
 				"name":        "claudio",
 				"version":     domain.Version,
-				"description": "Claude CLI proxy with agent management. Run `claudio` to start the HTTP server + web UI on port 18080 (configurable via PORT env var). Create named agents with custom system prompts and tools, open persistent sessions, and chat with streaming. Interfaces: HTTP API (localhost:18080), web UI (localhost:18080/), MCP server (--mcp flag, stdio), TUI (--tui flag). Install with: brew install bsantosio/tap/claudio",
+				"description": "Claude CLI proxy with agent management. Commands: `claudio` (TUI), `claudio web` (HTTP + web UI on port 18080), `claudio mcp` (MCP server, stdio), `claudio prompt` (AI usage prompt). Create named agents with custom system prompts and tools, open persistent sessions, chat with streaming. Install: brew install bsantosio/tap/claudio",
 			},
 		}
 	case "tools/list":
@@ -176,6 +178,10 @@ func handleToolsCall(req JSONRPCRequest, cfg domain.Config, st *store.Store) map
 		return toolInstallAgent(args, cfg, st)
 	case "uninstall_agent":
 		return toolUninstallAgent(args, cfg, st)
+	case "list_templates":
+		return toolListTemplates()
+	case "generate_agent":
+		return toolGenerateAgent(args, cfg, st)
 	default:
 		return toolError("unknown tool: " + params.Name)
 	}
@@ -350,6 +356,54 @@ func toolUninstallAgent(args map[string]any, cfg domain.Config, st *store.Store)
 		return toolError(err.Error())
 	}
 	return toolResult(`{"uninstalled":true,"agent":"` + agent.Name + `"}`)
+}
+
+func toolListTemplates() map[string]any {
+	b, _ := json.Marshal(domain.AgentTemplates)
+	return toolResult(string(b))
+}
+
+func toolGenerateAgent(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
+	description, _ := args["description"].(string)
+	if strings.TrimSpace(description) == "" {
+		return toolError("description is required")
+	}
+
+	generatorAgent := &domain.Agent{
+		Model:        "sonnet",
+		SystemPrompt: domain.AgentGeneratorPrompt,
+	}
+	sessionID, _ := domain.NewUUID()
+
+	var result strings.Builder
+	runner := claude.Runner(claude.RunClaude)
+	if RunnerOverride != nil {
+		runner = RunnerOverride
+	}
+
+	ctx := context.Background()
+	err := runner(ctx, cfg, generatorAgent, sessionID, description, false, func(eventType string, data []byte) error {
+		if eventType == "result" {
+			var ev struct {
+				Result string `json:"result"`
+			}
+			if json.Unmarshal(data, &ev) == nil {
+				result.WriteString(ev.Result)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return toolError("generation failed: " + err.Error())
+	}
+
+	text := strings.TrimSpace(result.String())
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	return toolResult(text)
 }
 
 func RunMCPServer(cfg domain.Config, st *store.Store, r io.Reader, w io.Writer) error {

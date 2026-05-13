@@ -63,14 +63,22 @@ function router() {
 
   const [screen, ...rest] = parts;
 
-  if (screen === 'agents' && rest.length === 0) {
+  if (screen === 'quickchat') {
+    renderQuickChatScreen(app);
+  } else if (screen === 'agents' && rest.length === 0) {
     renderAgentsScreen(app);
   } else if (screen === 'agents' && rest[0] === 'new') {
     renderNewAgentScreen(app);
-  } else if (screen === 'sessions') {
-    renderSessionsScreen(app, null);
+  } else if (screen === 'agents' && rest.length >= 2 && rest[1] === 'sessions') {
+    renderSessionsScreen(app, rest[0]);
   } else if (screen === 'chat' && rest[0]) {
     renderChatScreen(app, rest[0]);
+  } else if (screen === 'templates') {
+    renderTemplatesScreen(app);
+  } else if (screen === 'prompt') {
+    renderPromptScreen(app);
+  } else if (screen === 'docs') {
+    renderDocsScreen(app);
   } else {
     renderAgentsScreen(app);
   }
@@ -107,6 +115,7 @@ async function renderAgentsScreen(container) {
       `<div class="empty">Error: ${esc(e.message)}</div>`;
     return;
   }
+  agents = agents.filter(a => a.name !== 'Quick Chat');
   state.agents = agents;
 
   const list = document.getElementById('agent-list');
@@ -139,7 +148,7 @@ async function renderAgentsScreen(container) {
     const { action, id, name } = btn.dataset;
 
     if (action === 'sessions') {
-      renderSessionsScreen(container, id);
+      navigate(`agents/${id}/sessions`);
     } else if (action === 'install') {
       btn.disabled = true;
       btn.textContent = '…';
@@ -181,6 +190,22 @@ async function renderNewAgentScreen(container) {
   container.innerHTML = `
     <a class="back" href="#agents">← Back to agents</a>
     <div class="screen-header"><h1>New Agent</h1></div>
+
+    <div class="generate-section">
+      <h2 class="docs-section">Generate with AI</h2>
+      <p class="section-desc">Describe what you want the agent to do. Claude will generate the optimal configuration.</p>
+      <div class="form-group">
+        <textarea id="gen-desc" rows="3" placeholder="I want an agent that reviews Go code for security vulnerabilities and suggests fixes..."></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="primary" id="btn-generate">Generate with AI</button>
+      </div>
+      <div id="gen-status" style="margin-top:8px"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <h2 class="docs-section">Or configure manually</h2>
     <div class="form-group">
       <label>Name</label>
       <input id="ag-name" type="text" placeholder="my-agent" />
@@ -205,6 +230,36 @@ async function renderNewAgentScreen(container) {
     <div id="ag-error" style="color:var(--danger);margin-top:10px;display:none"></div>
   `;
 
+  // AI generation
+  document.getElementById('btn-generate').onclick = async () => {
+    const desc = document.getElementById('gen-desc').value.trim();
+    if (!desc) return;
+    const btn = document.getElementById('btn-generate');
+    const statusEl = document.getElementById('gen-status');
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    statusEl.innerHTML = '';
+    try {
+      const generated = await apiJSON('POST', '/agents/generate', { description: desc });
+      // Pre-fill the manual form with generated values
+      document.getElementById('ag-name').value = generated.name || '';
+      document.getElementById('ag-prompt').value = generated.system_prompt || '';
+      if (generated.model) {
+        const sel = document.getElementById('ag-model');
+        for (const opt of sel.options) {
+          if (opt.value === generated.model) { opt.selected = true; break; }
+        }
+      }
+      statusEl.innerHTML = '<span style="color:var(--accent2)">✓ Generated! Review and edit below, then click Create.</span>';
+    } catch (e) {
+      statusEl.innerHTML = '<span style="color:var(--danger)">Error: ' + esc(e.message) + '</span>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Generate with AI';
+    }
+  };
+
+  // Manual create
   document.getElementById('btn-cancel-agent').onclick = () => navigate('agents');
   document.getElementById('btn-create-agent').onclick = async () => {
     const name = document.getElementById('ag-name').value.trim();
@@ -230,7 +285,9 @@ function showFieldError(el, msg) {
 /* ── sessions screen ── */
 
 async function renderSessionsScreen(container, agentId) {
-  const titleSuffix = agentId ? ` for ${agentId.slice(0, 8)}…` : '';
+  const agent = state.agents.find(a => a.id === agentId);
+  const agentLabel = agent ? agent.name : (agentId ? agentId.slice(0, 8) + '…' : '');
+  const titleSuffix = agentLabel ? ` — ${agentLabel}` : '';
   container.innerHTML = `
     <a class="back" href="#agents">← Back to agents</a>
     <div class="screen-header">
@@ -304,11 +361,60 @@ async function renderSessionsScreen(container, agentId) {
   });
 }
 
+/* ── quick chat screen ── */
+
+async function renderQuickChatScreen(container) {
+  container.innerHTML = `
+    <div class="screen-header"><h1>Quick Chat</h1></div>
+    <p class="section-desc">Pick a model and start chatting — no agent setup needed.</p>
+    <div class="model-grid" id="model-grid"></div>
+    <div id="quickchat-status" style="margin-top:12px"></div>
+  `;
+
+  const models = [
+    { id: 'sonnet', label: 'Sonnet', desc: 'Fast, balanced — best for most tasks' },
+    { id: 'opus', label: 'Opus', desc: 'Most capable — complex reasoning' },
+    { id: 'haiku', label: 'Haiku', desc: 'Fastest — quick tasks' },
+    { id: 'claude-opus-4-6[1m]', label: 'Opus 4.6 [1M]', desc: 'Opus with 1M context window' },
+  ];
+
+  const grid = document.getElementById('model-grid');
+  models.forEach(m => {
+    const card = document.createElement('button');
+    card.className = 'model-card';
+    card.innerHTML = `<div class="model-card-title">${esc(m.label)}</div><div class="model-card-desc">${esc(m.desc)}</div>`;
+    card.onclick = () => startQuickChat(container, m.id);
+    grid.appendChild(card);
+  });
+}
+
+async function startQuickChat(container, model) {
+  const statusEl = document.getElementById('quickchat-status');
+  statusEl.innerHTML = '<div class="empty">Starting session…</div>';
+
+  // Disable all model cards
+  document.querySelectorAll('.model-card').forEach(c => { c.disabled = true; });
+
+  try {
+    const agent = await apiJSON('POST', '/agents', {
+      name: 'Quick Chat',
+      system_prompt: 'You are a helpful assistant.',
+      model: model,
+    });
+    const session = await apiJSON('POST', `/agents/${agent.id}/sessions`, { name: 'quick' });
+    navigate(`chat/${session.id}`);
+  } catch (e) {
+    statusEl.innerHTML = `<div class="empty" style="color:var(--danger)">Error: ${esc(e.message)}</div>`;
+    document.querySelectorAll('.model-card').forEach(c => { c.disabled = false; });
+  }
+}
+
 /* ── chat screen ── */
 
 async function renderChatScreen(container, sessionId) {
   container.innerHTML = `
-    <a class="back" href="#sessions">← Back to sessions</a>
+    <a class="back" href="#agents">← Back</a>
+    <div class="chat-header"></div>
     <div class="chat-container">
       <div id="chat-messages" class="chat-messages"></div>
       <div class="chat-input-row">
@@ -321,6 +427,16 @@ async function renderChatScreen(container, sessionId) {
   const messagesEl = document.getElementById('chat-messages');
   const inputEl = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send');
+
+  // Load session details to show agent name and model in header.
+  try {
+    const sess = await apiJSON('GET', `/sessions/${sessionId}`);
+    const agent = await apiJSON('GET', `/agents/${sess.agent_id}`);
+    const header = container.querySelector('.chat-header');
+    if (header) {
+      header.textContent = `${agent.name} — ${agent.model}`;
+    }
+  } catch (_) {}
 
   // Load message history.
   try {
@@ -345,10 +461,14 @@ async function renderChatScreen(container, sessionId) {
     scrollBottom(messagesEl);
 
     try {
-      await streamMessage(sessionId, content, chunk => {
+      const result = await streamMessage(sessionId, content, chunk => {
         assistantBubble.textContent += chunk;
         scrollBottom(messagesEl);
       });
+      if (result && result.usage) {
+        appendUsageBadge(messagesEl, result);
+        scrollBottom(messagesEl);
+      }
     } catch (e) {
       assistantBubble.classList.remove('streaming');
       assistantBubble.classList.add('error');
@@ -388,6 +508,7 @@ async function streamMessage(sessionId, content, onChunk) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let resultData = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -395,36 +516,68 @@ async function streamMessage(sessionId, content, onChunk) {
 
     buffer += decoder.decode(value, { stream: true });
 
-    // Split on SSE event boundaries (\n\n).
     const events = buffer.split('\n\n');
-    // Keep the last (possibly incomplete) chunk in the buffer.
     buffer = events.pop();
 
     for (const event of events) {
-      const dataLine = event.split('\n').find(l => l.startsWith('data:'));
+      const lines = event.split('\n');
+      const eventLine = lines.find(l => l.startsWith('event:'));
+      const dataLine = lines.find(l => l.startsWith('data:'));
       if (!dataLine) continue;
+
+      const eventType = eventLine ? eventLine.slice('event:'.length).trim() : '';
       const raw = dataLine.slice('data:'.length).trimStart();
 
-      // Parse the inner JSON payload from the SSE data field.
       try {
         const payload = JSON.parse(raw);
-        // assistant events carry text content.
-        if (payload.type === 'assistant' && payload.message?.content) {
-          for (const part of payload.message.content) {
-            if (part.type === 'text' && part.text) {
-              onChunk(part.text);
-            }
-          }
+        if (eventType === 'text_delta' && payload.text) {
+          onChunk(payload.text);
+        } else if (eventType === 'result') {
+          resultData = payload;
         }
-        // result event signals end of stream — no action needed (loop ends naturally).
-      } catch (_) {
-        // Ignore non-JSON lines (keep-alives, comments, etc.)
-      }
+      } catch (_) {}
     }
   }
+
+  return resultData;
 }
 
 /* ── helpers ── */
+
+function appendUsageBadge(container, result) {
+  const u = result.usage;
+  if (!u) return;
+
+  const input = u.input_tokens || 0;
+  const output = u.output_tokens || 0;
+  const cacheRead = u.cache_read_input_tokens || 0;
+  const cacheCreate = u.cache_creation_input_tokens || 0;
+  const total = input + output + cacheRead + cacheCreate;
+  const contextWindow = u.context_window || 0;
+  const cost = result.cost_usd || 0;
+
+  let pctText = '';
+  if (contextWindow > 0) {
+    const pct = ((total / contextWindow) * 100).toFixed(1);
+    pctText = ` · ${pct}% of ${formatTokens(contextWindow)}`;
+  }
+
+  const div = document.createElement('div');
+  div.className = 'usage-badge';
+  div.innerHTML = `
+    <span>in: ${formatTokens(input)}</span>
+    <span>out: ${formatTokens(output)}</span>
+    <span>cache: ${formatTokens(cacheRead + cacheCreate)}</span>
+    <span>total: ${formatTokens(total)}${pctText}</span>
+    <span>cost: $${cost.toFixed(4)}</span>
+  `;
+  container.appendChild(div);
+}
+
+function formatTokens(n) {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+}
 
 function appendBubble(container, role, text) {
   const div = document.createElement('div');
@@ -447,10 +600,305 @@ function esc(str) {
     .replace(/"/g, '&quot;');
 }
 
+/* ── templates screen ── */
+
+async function renderTemplatesScreen(container) {
+  container.innerHTML = `
+    <div class="screen-header"><h1>Agent Templates</h1></div>
+    <p class="section-desc">Pre-built agent configurations with optimized prompts. Click to install.</p>
+    <div id="template-list"><div class="empty">Loading…</div></div>
+  `;
+
+  let templates;
+  try {
+    templates = await apiJSON('GET', '/api/templates');
+  } catch (e) {
+    document.getElementById('template-list').innerHTML = '<div class="empty">Error: ' + esc(e.message) + '</div>';
+    return;
+  }
+
+  const list = document.getElementById('template-list');
+  if (!templates.length) {
+    list.innerHTML = '<div class="empty">No templates available.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  templates.forEach(t => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="card-body">
+        <div class="card-title">${esc(t.name)}</div>
+        <div class="card-meta">${esc(t.description)} · model: ${esc(t.model)}</div>
+      </div>
+      <div class="card-actions">
+        <button class="primary small" data-action="install-template">Create Agent</button>
+      </div>
+    `;
+    card.querySelector('button').onclick = async () => {
+      const btn = card.querySelector('button');
+      btn.disabled = true;
+      btn.textContent = 'Creating…';
+      try {
+        await apiJSON('POST', '/agents', {
+          name: t.name,
+          system_prompt: t.system_prompt,
+          model: t.model,
+          allowed_tools: t.allowed_tools,
+          max_turns: t.max_turns,
+        });
+        btn.textContent = '✓ Created';
+        btn.className = 'small badge green';
+      } catch (e) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+      }
+    };
+    list.appendChild(card);
+  });
+}
+
+/* ── prompt screen ── */
+
+async function renderPromptScreen(container) {
+  container.innerHTML = `
+    <div class="screen-header">
+      <h1>AI Prompt</h1>
+      <button class="primary" id="btn-copy-prompt">Copy to clipboard</button>
+    </div>
+    <p class="section-desc">Paste this prompt into any AI to give it full context on how to use claudio.</p>
+    <pre id="prompt-text" class="code-block">Loading…</pre>
+  `;
+
+  try {
+    const res = await fetch('/api/prompt');
+    const text = await res.text();
+    document.getElementById('prompt-text').textContent = text;
+
+    document.getElementById('btn-copy-prompt').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        const btn = document.getElementById('btn-copy-prompt');
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => { btn.textContent = 'Copy to clipboard'; }, 2000);
+      } catch (_) {
+        alert('Copy failed — select the text manually.');
+      }
+    };
+  } catch (e) {
+    document.getElementById('prompt-text').textContent = 'Error loading prompt: ' + e.message;
+  }
+}
+
+/* ── docs screen ── */
+
+function renderDocsScreen(container) {
+  container.innerHTML = `
+    <div class="screen-header"><h1>API Reference</h1></div>
+
+    <h2 class="docs-section">Models</h2>
+    <table class="docs-table">
+      <tr><td><strong>sonnet</strong></td><td>claude-sonnet-4-6</td><td>200k context</td><td>Fast, balanced — default</td></tr>
+      <tr><td><strong>opus</strong></td><td>claude-opus-4-7</td><td>200k context</td><td>Most capable</td></tr>
+      <tr><td><strong>haiku</strong></td><td>claude-haiku-4-5</td><td>200k context</td><td>Fastest, cheapest</td></tr>
+      <tr><td><strong>claude-opus-4-6[1m]</strong></td><td>claude-opus-4-6[1m]</td><td>1M context</td><td>Opus 4.6 extended context</td></tr>
+    </table>
+    <p class="section-desc">Use the alias (sonnet, opus, haiku) or the full model ID. OpenAI aliases: gpt-4 → opus, gpt-4o → sonnet, gpt-3.5-turbo → haiku.</p>
+
+    <h2 class="docs-section">Agents</h2>
+
+    <h3 class="docs-sub">POST /agents — Create agent</h3>
+    <pre class="code-block">curl -X POST http://localhost:18080/agents \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "name": "code-reviewer",
+    "system_prompt": "You are an expert code reviewer.",
+    "model": "sonnet",
+    "allowed_tools": ["Bash", "Read", "Grep"],
+    "max_turns": 10,
+    "permission_mode": "auto-accept"
+  }'</pre>
+    <p class="section-desc">Response (201): Agent object with id, name, model, created_at, updated_at.</p>
+
+    <h3 class="docs-sub">GET /agents — List agents</h3>
+    <pre class="code-block">curl http://localhost:18080/agents</pre>
+
+    <h3 class="docs-sub">GET /agents/{id} — Get agent</h3>
+    <pre class="code-block">curl http://localhost:18080/agents/{id}</pre>
+
+    <h3 class="docs-sub">PUT /agents/{id} — Update agent</h3>
+    <pre class="code-block">curl -X PUT http://localhost:18080/agents/{id} \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "new-name", "model": "opus"}'</pre>
+
+    <h3 class="docs-sub">DELETE /agents/{id} — Delete agent</h3>
+    <pre class="code-block">curl -X DELETE http://localhost:18080/agents/{id}</pre>
+    <p class="section-desc">Returns 409 if agent has active sessions.</p>
+
+    <h3 class="docs-sub">POST /agents/{id}/install — Install to Claude Code</h3>
+    <pre class="code-block">curl -X POST http://localhost:18080/agents/{id}/install</pre>
+    <p class="section-desc">Creates .claude/agents/{name}.md — agent becomes available as @agent-name in Claude Code.</p>
+
+    <h3 class="docs-sub">DELETE /agents/{id}/install — Uninstall from Claude Code</h3>
+    <pre class="code-block">curl -X DELETE http://localhost:18080/agents/{id}/install</pre>
+
+    <h2 class="docs-section">Sessions</h2>
+
+    <h3 class="docs-sub">POST /agents/{aid}/sessions — Create session</h3>
+    <pre class="code-block">curl -X POST http://localhost:18080/agents/{agent_id}/sessions \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "my-session"}'</pre>
+    <p class="section-desc">Response (201): Session object with id, agent_id, turn_count, created_at.</p>
+
+    <h3 class="docs-sub">GET /agents/{aid}/sessions — List sessions</h3>
+    <pre class="code-block">curl http://localhost:18080/agents/{agent_id}/sessions</pre>
+
+    <h3 class="docs-sub">GET /sessions/{sid} — Get session</h3>
+    <pre class="code-block">curl http://localhost:18080/sessions/{session_id}</pre>
+
+    <h3 class="docs-sub">DELETE /sessions/{sid} — Delete session</h3>
+    <pre class="code-block">curl -X DELETE http://localhost:18080/sessions/{session_id}</pre>
+    <p class="section-desc">Returns 409 if session has an in-flight request.</p>
+
+    <h2 class="docs-section">Messages</h2>
+
+    <h3 class="docs-sub">POST /sessions/{sid}/message — Send message (SSE stream)</h3>
+    <pre class="code-block">curl -N -X POST http://localhost:18080/sessions/{session_id}/message \\
+  -H "Content-Type: application/json" \\
+  -d '{"content": "Review this function for bugs"}'</pre>
+    <p class="section-desc">Response is a Server-Sent Events stream:</p>
+    <pre class="code-block">event: session_init
+data: {"session_id": "s1e2s3s4-..."}
+
+event: text_delta
+data: {"text": "Looking at the function..."}
+
+event: text_delta
+data: {"text": " I found a potential null pointer issue."}
+
+event: result
+data: {"text": "full response", "cost_usd": 0.0756, "usage": {
+  "input_tokens": 6, "output_tokens": 42,
+  "cache_read_input_tokens": 32000,
+  "cache_creation_input_tokens": 3000,
+  "context_window": 200000
+}}</pre>
+
+    <h3 class="docs-sub">GET /sessions/{sid}/messages — Message history</h3>
+    <pre class="code-block">curl http://localhost:18080/sessions/{session_id}/messages</pre>
+    <p class="section-desc">Response: array of {role, content} objects from Claude CLI's session JSONL files.</p>
+
+    <h2 class="docs-section">OpenAI-Compatible</h2>
+
+    <h3 class="docs-sub">GET /v1/models — List models</h3>
+    <pre class="code-block">curl http://localhost:18080/v1/models</pre>
+
+    <h3 class="docs-sub">POST /v1/chat/completions — Chat (non-streaming)</h3>
+    <pre class="code-block">curl -X POST http://localhost:18080/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "sonnet",
+    "messages": [
+      {"role": "system", "content": "You are helpful."},
+      {"role": "user", "content": "Hello!"}
+    ],
+    "stream": false
+  }'</pre>
+    <p class="section-desc">Response includes usage: {prompt_tokens, completion_tokens, total_tokens}.</p>
+
+    <h3 class="docs-sub">POST /v1/chat/completions — Chat (streaming)</h3>
+    <pre class="code-block">curl -N -X POST http://localhost:18080/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello"}], "stream": true}'</pre>
+    <p class="section-desc">Returns SSE chunks in OpenAI format, ending with data: [DONE].</p>
+
+    <h3 class="docs-sub">X-Agent-Id header</h3>
+    <pre class="code-block">curl -X POST http://localhost:18080/v1/chat/completions \\
+  -H "X-Agent-Id: {agent_id}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Review this"}], "stream": false}'</pre>
+    <p class="section-desc">Routes the request through a specific agent's system prompt and config.</p>
+
+    <h2 class="docs-section">System</h2>
+
+    <h3 class="docs-sub">GET /health</h3>
+    <pre class="code-block">curl http://localhost:18080/health</pre>
+    <pre class="code-block">{"status": "ok", "claude_auth": "authenticated", "version": "0.3.0", "claude_version": "2.1.140"}</pre>
+
+    <h3 class="docs-sub">GET /api/prompt</h3>
+    <pre class="code-block">curl http://localhost:18080/api/prompt</pre>
+    <p class="section-desc">Returns the full AI-ready usage prompt as plain text. Paste into any AI for instant context.</p>
+
+    <h2 class="docs-section">Authentication</h2>
+    <p class="section-desc">Set ADAPTER_API_KEY to require Bearer token on all API routes (except /health, / and /web/*):</p>
+    <pre class="code-block">ADAPTER_API_KEY=my-secret claudio web
+curl -H "Authorization: Bearer my-secret" http://localhost:18080/agents</pre>
+
+    <h2 class="docs-section">How to Write Good Agent Prompts</h2>
+    <p class="section-desc">The system prompt is the most important part of an agent. A vague prompt creates a generic agent. A structured prompt creates a specialist.</p>
+
+    <h3 class="docs-sub">Recommended structure</h3>
+    <pre class="code-block">## Purpose
+One or two sentences: what this agent does and its primary goal.
+
+## Constraints
+- What the agent MUST always do
+- What the agent MUST NEVER do
+- Quality standards and boundaries
+- Tools it should prefer or avoid
+
+## Workflow
+1. First, understand the input/context
+2. Then, analyze/process/execute the main task
+3. Finally, format and deliver the output
+
+## Output Format
+How the agent should structure its responses:
+- Summaries first, details after
+- Use headers/sections for long outputs
+- Include code examples when relevant</pre>
+
+    <h3 class="docs-sub">Good vs bad prompts</h3>
+    <table class="docs-table">
+      <tr><td style="color:var(--danger)">Bad</td><td>"You are a code reviewer"</td></tr>
+      <tr><td style="color:var(--accent2)">Good</td><td>"You are a security-focused code reviewer. Check every change for: injection vulnerabilities, auth bypass, data exposure, and unsafe deserialization. For each finding: show the file:line, explain the attack vector, rate severity (critical/high/medium/low), and provide a fix."</td></tr>
+    </table>
+    <table class="docs-table">
+      <tr><td style="color:var(--danger)">Bad</td><td>"Help me write tests"</td></tr>
+      <tr><td style="color:var(--accent2)">Good</td><td>"You are a TDD enforcer. For every feature: 1) Write a failing test first (RED), 2) Write minimum code to pass (GREEN), 3) Refactor. Use table-driven tests. Test edge cases: nil, empty, zero, max, concurrent access. Never mock the system under test."</td></tr>
+    </table>
+
+    <h3 class="docs-sub">Tips</h3>
+    <table class="docs-table">
+      <tr><td><strong>Be specific</strong></td><td>Name the exact checks, formats, and steps you want</td></tr>
+      <tr><td><strong>Set boundaries</strong></td><td>Tell the agent what NOT to do — it prevents scope creep</td></tr>
+      <tr><td><strong>Define output</strong></td><td>If you want bullet points, say so. If you want JSON, show the schema</td></tr>
+      <tr><td><strong>Give examples</strong></td><td>One input/output example is worth 100 words of description</td></tr>
+      <tr><td><strong>Choose the right model</strong></td><td>haiku for quick tasks, sonnet for balanced work, opus for complex reasoning</td></tr>
+      <tr><td><strong>Limit tools</strong></td><td>Only give the tools the agent needs — fewer tools = more focused behavior</td></tr>
+    </table>
+  `;
+}
+
+/* ── health check ── */
+
+async function checkHealth() {
+  try {
+    const res = await fetch('/health');
+    const data = await res.json();
+    const banner = document.getElementById('health-banner');
+    if (data.status === 'degraded' || data.claude_auth !== 'authenticated') {
+      banner.textContent = '⚠ Claude CLI not authenticated — run: claude auth login';
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
+  } catch (_) {}
+}
+
 /* ── bootstrap ── */
 
 document.addEventListener('DOMContentLoaded', () => {
-  // API key modal controls.
   document.getElementById('key-save').onclick = () => {
     state.apiKey = document.getElementById('key-input').value.trim();
     hideKeyModal();
@@ -458,7 +906,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   document.getElementById('key-btn').onclick = showKeyModal;
 
-  // Hash router.
   window.addEventListener('hashchange', router);
+  checkHealth();
   router();
 });

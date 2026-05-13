@@ -28,6 +28,7 @@ const (
 	screenHistory
 	screenInstallPicker
 	screenInstallConfirm
+	screenQuickModel
 )
 
 type chatResponseMsg struct {
@@ -307,6 +308,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateInstallPicker(msg)
 	case screenInstallConfirm:
 		return m.updateInstallConfirm(msg)
+	case screenQuickModel:
+		return m.updateQuickModel(msg)
 	}
 	return m, nil
 }
@@ -337,6 +340,8 @@ func (m Model) View() string {
 		return m.renderInstallPicker()
 	case screenInstallConfirm:
 		return m.renderInstallConfirm()
+	case screenQuickModel:
+		return m.renderQuickModel()
 	}
 	return ""
 }

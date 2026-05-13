@@ -194,9 +194,12 @@ func (m Model) renderSessionPicker() string {
 
 func (m Model) renderChatScreen() string {
 	var sb strings.Builder
-	title := "Quick Chat (" + m.cfg.DefaultModel + ")"
-	if m.screen == screenChat && m.currentAgent != nil && m.currentSess != nil {
-		title = m.currentAgent.Name + " > " + sessionDisplayName(m.currentSess)
+	title := "Quick Chat"
+	if m.currentAgent != nil {
+		title = m.currentAgent.Name + " (" + m.currentAgent.Model + ")"
+		if m.currentSess != nil && !m.quickChat {
+			title = m.currentAgent.Name + " > " + sessionDisplayName(m.currentSess) + " (" + m.currentAgent.Model + ")"
+		}
 	}
 	sb.WriteString(m.renderHeader(title))
 	maxMsgs := m.height - 12
@@ -263,6 +266,14 @@ func (m Model) renderInstallPicker() string {
 		}
 	}
 	sb.WriteString(m.renderFooter("enter: install  u: uninstall  esc: back"))
+	return sb.String()
+}
+
+func (m Model) renderQuickModel() string {
+	var sb strings.Builder
+	sb.WriteString(m.renderHeader("Quick Chat — Select Model"))
+	sb.WriteString(m.renderList(m.items, m.cursor))
+	sb.WriteString(m.renderFooter("j/k: navigate  enter: select  esc: back"))
 	return sb.String()
 }
 

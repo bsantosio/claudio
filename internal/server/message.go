@@ -79,13 +79,47 @@ func RegisterMessageHandler(
 					Result    string  `json:"result"`
 					TotalCost float64 `json:"total_cost_usd"`
 					SessionID string  `json:"session_id"`
+					Usage     struct {
+						InputTokens              int `json:"input_tokens"`
+						OutputTokens             int `json:"output_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					} `json:"usage"`
+					ModelUsage json.RawMessage `json:"modelUsage"`
 				}
 				if err := json.Unmarshal(data, &resultEv); err != nil {
 					return nil
 				}
+				usageData := map[string]any{
+					"input_tokens":  resultEv.Usage.InputTokens,
+					"output_tokens": resultEv.Usage.OutputTokens,
+					"cache_creation_input_tokens": resultEv.Usage.CacheCreationInputTokens,
+					"cache_read_input_tokens":     resultEv.Usage.CacheReadInputTokens,
+				}
+				var contextWindow, maxOutput int
+				if resultEv.ModelUsage != nil {
+					var mu map[string]struct {
+						ContextWindow  int `json:"contextWindow"`
+						MaxOutputTokens int `json:"maxOutputTokens"`
+					}
+					if json.Unmarshal(resultEv.ModelUsage, &mu) == nil {
+						for _, v := range mu {
+							contextWindow = v.ContextWindow
+							maxOutput = v.MaxOutputTokens
+							break
+						}
+					}
+				}
+				if contextWindow > 0 {
+					usageData["context_window"] = contextWindow
+				}
+				if maxOutput > 0 {
+					usageData["max_output_tokens"] = maxOutput
+				}
 				resultData, _ := json.Marshal(map[string]any{
 					"text":     resultEv.Result,
 					"cost_usd": resultEv.TotalCost,
+					"usage":    usageData,
 				})
 				sseEvent = claude.FormatSSE("result", string(resultData))
 			default:

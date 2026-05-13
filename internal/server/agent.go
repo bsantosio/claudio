@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
+	"claudio/internal/claude"
 	"claudio/internal/domain"
 	"claudio/internal/store"
 )
@@ -76,6 +78,60 @@ func RegisterAgentHandlers(mux *http.ServeMux, cfg domain.Config, st *store.Stor
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /agents/generate", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if strings.TrimSpace(input.Description) == "" {
+			WriteError(w, http.StatusBadRequest, "description is required")
+			return
+		}
+
+		generatorAgent := &domain.Agent{
+			Model:        "sonnet",
+			SystemPrompt: domain.AgentGeneratorPrompt,
+		}
+		sessionID, _ := domain.NewUUID()
+
+		var result strings.Builder
+		ctx := r.Context()
+		err := claude.RunClaude(ctx, cfg, generatorAgent, sessionID, input.Description, false, func(eventType string, data []byte) error {
+			if eventType == "result" {
+				var ev struct {
+					Result string `json:"result"`
+				}
+				if json.Unmarshal(data, &ev) == nil {
+					result.WriteString(ev.Result)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "generation failed: "+err.Error())
+			return
+		}
+
+		// Parse the generated JSON
+		text := strings.TrimSpace(result.String())
+		// Strip markdown code fences if Claude wrapped the output
+		text = strings.TrimPrefix(text, "```json")
+		text = strings.TrimPrefix(text, "```")
+		text = strings.TrimSuffix(text, "```")
+		text = strings.TrimSpace(text)
+
+		var generated domain.Agent
+		if err := json.Unmarshal([]byte(text), &generated); err != nil {
+			WriteError(w, http.StatusInternalServerError, "failed to parse generated config — raw: "+text)
+			return
+		}
+
+		WriteJSON(w, http.StatusOK, generated)
 	})
 
 	// Task 2.3 — Install agent: copies definition to .claude/agents/.

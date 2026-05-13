@@ -230,14 +230,24 @@ func openaiCompletionsHandler(
 			}
 		} else {
 			var buf bytes.Buffer
+			var usage OpenAIUsage
 			ctx := r.Context()
 			runErr := runner(ctx, cfg, agent, sessionID, prompt, resume, func(eventType string, data []byte) error {
 				if eventType == "result" {
 					var resultEv struct {
 						Result string `json:"result"`
+						Usage  struct {
+							InputTokens              int `json:"input_tokens"`
+							OutputTokens             int `json:"output_tokens"`
+							CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+							CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+						} `json:"usage"`
 					}
 					if err := json.Unmarshal(data, &resultEv); err == nil {
 						buf.WriteString(resultEv.Result)
+						usage.PromptTokens = resultEv.Usage.InputTokens + resultEv.Usage.CacheReadInputTokens + resultEv.Usage.CacheCreationInputTokens
+						usage.CompletionTokens = resultEv.Usage.OutputTokens
+						usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 					}
 				}
 				return nil
@@ -261,7 +271,7 @@ func openaiCompletionsHandler(
 						FinishReason: "stop",
 					},
 				},
-				Usage: OpenAIUsage{},
+				Usage: usage,
 			}
 			WriteJSON(w, http.StatusOK, resp)
 		}

@@ -126,7 +126,7 @@ func TestMCP_ToolsList_ReturnsAllTools(t *testing.T) {
 	expectedTools := []string{
 		"create_agent", "list_agents", "get_agent", "delete_agent",
 		"create_session", "list_sessions", "send_message", "get_messages", "delete_session",
-		"install_agent", "uninstall_agent",
+		"install_agent", "uninstall_agent", "list_templates", "generate_agent",
 	}
 	if len(tools) != len(expectedTools) {
 		t.Errorf("expected %d tools, got %d", len(expectedTools), len(tools))

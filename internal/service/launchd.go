@@ -72,7 +72,7 @@ func generatePlist(binaryPath, port string) (string, error) {
         <key>DATA_DIR</key>
         <string>%s</string>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>%s</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -84,7 +84,7 @@ func generatePlist(binaryPath, port string) (string, error) {
     <string>%s</string>
 </dict>
 </plist>
-`, plistLabel, binaryPath, port, dataDir,
+`, plistLabel, binaryPath, port, dataDir, os.Getenv("PATH"),
 		filepath.Join(logs, "claudio.out.log"),
 		filepath.Join(logs, "claudio.err.log")), nil
 }

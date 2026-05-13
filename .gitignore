@@ -26,3 +26,7 @@ dist/
 # Data
 data/
 *.db
+
+# Test artifacts
+*.png
+.playwright-mcp/

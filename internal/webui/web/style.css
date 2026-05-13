@@ -260,3 +260,147 @@ header nav a:hover { color: var(--text); }
 /* ── back link ── */
 .back { color: var(--text-dim); font-size: 13px; margin-bottom: 16px; display: inline-block; }
 .back:hover { color: var(--text); }
+
+/* ── select ── */
+select {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  outline: none;
+  width: 100%;
+}
+select:focus { border-color: var(--accent); }
+
+/* ── health banner ── */
+.health-banner {
+  background: var(--warn);
+  color: #000;
+  text-align: center;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: bold;
+}
+.health-banner.hidden { display: none; }
+
+/* ── chat header ── */
+.chat-header {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+/* ── code block ── */
+.code-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  margin: 12px 0;
+}
+
+/* ── docs ── */
+.section-desc {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 8px 0 12px;
+}
+
+.docs-section {
+  font-size: 15px;
+  font-weight: bold;
+  margin-top: 24px;
+  margin-bottom: 8px;
+  color: var(--accent);
+}
+
+.docs-sub {
+  font-size: 13px;
+  font-weight: bold;
+  margin-top: 16px;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.docs-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.docs-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  vertical-align: top;
+}
+.docs-table code {
+  color: var(--accent);
+}
+
+.method {
+  font-weight: bold;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  width: 60px;
+}
+.method.get { color: var(--accent2); }
+.method.post { color: var(--accent); }
+.method.put { color: var(--warn); }
+.method.delete { color: var(--danger); }
+
+/* ── model grid (quick chat) ── */
+.model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.model-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.model-card:hover { border-color: var(--accent); background: var(--surface2); }
+.model-card:disabled { opacity: 0.5; cursor: wait; }
+.model-card-title { font-weight: bold; font-size: 15px; margin-bottom: 4px; color: var(--accent); }
+.model-card-desc { font-size: 12px; color: var(--text-dim); }
+
+/* ── divider ── */
+.divider {
+  border-top: 1px solid var(--border);
+  margin: 24px 0;
+}
+.generate-section {
+  margin-bottom: 8px;
+}
+
+/* ── usage badge ── */
+.usage-badge {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  align-self: flex-start;
+}

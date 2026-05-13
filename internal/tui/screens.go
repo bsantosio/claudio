@@ -74,21 +74,48 @@ func (m Model) updateMenu(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) startQuickChat() (Model, tea.Cmd) {
-	sessionID, _ := domain.NewUUID()
-	m.currentAgent = &domain.Agent{
-		Name:         "Quick Chat",
-		SystemPrompt: "You are a helpful assistant.",
-		Model:        m.cfg.DefaultModel,
-	}
-	m.currentSess = &domain.Session{
-		ID:   sessionID,
-		Name: "quick",
-	}
-	m.chatMsgs = nil
-	m.screen = screenChat
-	m.input.Focus()
+	m.screen = screenQuickModel
+	m.items = []string{"sonnet", "opus", "haiku", "claude-opus-4-6[1m]"}
+	m.cursor = 0
 	m.status = ""
-	m.quickChat = true
+	return m, nil
+}
+
+func (m Model) updateQuickModel(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.screen = screenMenu
+			m.cursor = 0
+			m.status = ""
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.items)-1 {
+				m.cursor++
+			}
+		case "enter":
+			model := m.items[m.cursor]
+			sessionID, _ := domain.NewUUID()
+			m.currentAgent = &domain.Agent{
+				Name:         "Quick Chat",
+				SystemPrompt: "You are a helpful assistant.",
+				Model:        model,
+			}
+			m.currentSess = &domain.Session{
+				ID:   sessionID,
+				Name: "quick",
+			}
+			m.chatMsgs = nil
+			m.screen = screenChat
+			m.input.Focus()
+			m.status = ""
+			m.quickChat = true
+		}
+	}
 	return m, nil
 }
 
