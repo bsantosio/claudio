@@ -18,7 +18,10 @@ func (s *Server) registerSessionHandlers(mux *http.ServeMux) {
 		var input struct {
 			Name string `json:"name"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&input)
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil && r.ContentLength > 0 {
+			WriteError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
 		sess, err := s.store.CreateSession(aid, input.Name)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())

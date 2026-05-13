@@ -601,11 +601,7 @@ func toolGenerateAgent(args map[string]any, cfg domain.Config, st *store.Store, 
 		return toolError("generation failed: " + err.Error())
 	}
 
-	text := strings.TrimSpace(result.String())
-	text = strings.TrimPrefix(text, "```json")
-	text = strings.TrimPrefix(text, "```")
-	text = strings.TrimSuffix(text, "```")
-	text = strings.TrimSpace(text)
+	text := domain.StripCodeFences(result.String())
 
 	return toolResult(text)
 }

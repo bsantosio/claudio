@@ -76,8 +76,13 @@ CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
 	if _, err := s.db.Exec(ddl); err != nil {
 		return err
 	}
-	// Migration: add sub_agents column for existing databases (fails silently if already exists)
-	s.db.Exec(`ALTER TABLE agents ADD COLUMN sub_agents TEXT DEFAULT ''`)
+	// Migration: add sub_agents column for existing databases.
+	// ALTER TABLE fails with "duplicate column" if column exists — that's expected.
+	if _, err := s.db.Exec(`ALTER TABLE agents ADD COLUMN sub_agents TEXT DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("migrate sub_agents: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -469,7 +474,9 @@ func ReadSessionMessages(workDir, sessionID string) ([]domain.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	absDir, _ = filepath.EvalSymlinks(absDir)
+	if resolved, err := filepath.EvalSymlinks(absDir); err == nil {
+		absDir = resolved
+	}
 	encoded := encodePathForClaude(absDir)
 	home, err := os.UserHomeDir()
 	if err != nil {

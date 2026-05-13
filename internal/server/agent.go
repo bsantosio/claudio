@@ -116,13 +116,7 @@ func (s *Server) registerAgentHandlers(mux *http.ServeMux) {
 			return
 		}
 
-		// Parse the generated JSON
-		text := strings.TrimSpace(result.String())
-		// Strip markdown code fences if Claude wrapped the output
-		text = strings.TrimPrefix(text, "```json")
-		text = strings.TrimPrefix(text, "```")
-		text = strings.TrimSuffix(text, "```")
-		text = strings.TrimSpace(text)
+		text := domain.StripCodeFences(result.String())
 
 		var generated domain.Agent
 		if err := json.Unmarshal([]byte(text), &generated); err != nil {

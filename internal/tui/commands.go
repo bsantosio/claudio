@@ -43,7 +43,10 @@ func loadSessionsCmd(st *store.Store, agentID string) tea.Cmd {
 
 func loadMessagesCmd(workDir, sessionID string) tea.Cmd {
 	return func() tea.Msg {
-		msgs, _ := store.ReadSessionMessages(workDir, sessionID)
+		msgs, err := store.ReadSessionMessages(workDir, sessionID)
+		if err != nil {
+			return chatErrorMsg{err: err}
+		}
 		return messagesLoadedMsg{messages: msgs}
 	}
 }
@@ -82,7 +85,7 @@ func sendMessageCmd(cfg domain.Config, st *store.Store, agent *domain.Agent, ses
 					Result string  `json:"result"`
 					Cost   float64 `json:"total_cost_usd"`
 				}
-				_ = json.Unmarshal(data, &r)
+				json.Unmarshal(data, &r) //nolint:errcheck — best-effort cost extraction from optional field
 				cost = r.Cost
 				if response.Len() == 0 && r.Result != "" {
 					response.WriteString(r.Result)
@@ -99,7 +102,7 @@ func sendMessageCmd(cfg domain.Config, st *store.Store, agent *domain.Agent, ses
 		}
 		if !ephemeral {
 			sess.LastActive = time.Now().UTC().Format(time.RFC3339Nano)
-			_ = st.SaveSession(sess)
+			st.SaveSession(sess) //nolint:errcheck — non-critical; session state is ephemeral
 		}
 		return chatResponseMsg{content: text, cost: cost}
 	}

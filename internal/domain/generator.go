@@ -1,5 +1,15 @@
 package domain
 
+import "strings"
+
+func StripCodeFences(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	return strings.TrimSpace(s)
+}
+
 const AgentGeneratorPrompt = `You are an expert at creating AI agent configurations for claudio — a Claude CLI proxy.
 
 Given a description of what the user wants, generate a complete agent configuration.
