@@ -95,6 +95,19 @@ func (s *Server) registerMessageHandlers(mux *http.ServeMux) {
 				if err := json.Unmarshal(data, &resultEv); err != nil {
 					return nil
 				}
+				// Persist token usage — non-fatal on error (P1, P6, P7).
+				tu := domain.TokenUsage{
+					SessionID:                sid,
+					AgentID:                  agent.ID,
+					InputTokens:              resultEv.Usage.InputTokens,
+					OutputTokens:             resultEv.Usage.OutputTokens,
+					CacheCreationInputTokens: resultEv.Usage.CacheCreationInputTokens,
+					CacheReadInputTokens:     resultEv.Usage.CacheReadInputTokens,
+					TotalCostUSD:             resultEv.TotalCost,
+				}
+				if saveErr := s.store.SaveTokenUsage(tu); saveErr != nil {
+					log.Printf("failed to save token usage: %v", saveErr)
+				}
 				usageData := map[string]any{
 					"input_tokens":  resultEv.Usage.InputTokens,
 					"output_tokens": resultEv.Usage.OutputTokens,

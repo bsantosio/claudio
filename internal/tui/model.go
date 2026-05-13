@@ -80,6 +80,9 @@ type Model struct {
 	// status bar
 	status    string
 	statusErr bool
+
+	// usage tracking
+	sessionCost float64
 }
 
 func NewModel(cfg domain.Config, st *store.Store) Model {
@@ -151,6 +154,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatResponseMsg:
 		m.waiting = false
 		m.chatMsgs = append(m.chatMsgs, domain.Message{Role: "assistant", Content: msg.content})
+		m.sessionCost += msg.cost
 		return m, nil
 	case chatErrorMsg:
 		m.waiting = false
@@ -175,6 +179,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionCreatedMsg:
 		m.currentSess = msg.session
 		m.chatMsgs = nil
+		m.sessionCost = 0
 		m.screen = screenChat
 		m.input.Placeholder = ""
 		m.input.SetValue("")

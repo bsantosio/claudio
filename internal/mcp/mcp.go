@@ -489,12 +489,31 @@ func toolSendMessage(args map[string]any, cfg domain.Config, st *store.Store, ru
 			var resultEv struct {
 				Result    string  `json:"result"`
 				TotalCost float64 `json:"total_cost_usd"`
+				Usage     struct {
+					InputTokens              int `json:"input_tokens"`
+					OutputTokens             int `json:"output_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				} `json:"usage"`
 			}
 			if err := json.Unmarshal(data, &resultEv); err != nil {
 				return nil
 			}
 			if responseText.Len() == 0 && resultEv.Result != "" {
 				responseText.WriteString(resultEv.Result)
+			}
+			// Persist token usage — non-fatal on error (P4, P6, P7).
+			tu := domain.TokenUsage{
+				SessionID:                sessionID,
+				AgentID:                  agent.ID,
+				InputTokens:              resultEv.Usage.InputTokens,
+				OutputTokens:             resultEv.Usage.OutputTokens,
+				CacheCreationInputTokens: resultEv.Usage.CacheCreationInputTokens,
+				CacheReadInputTokens:     resultEv.Usage.CacheReadInputTokens,
+				TotalCostUSD:             resultEv.TotalCost,
+			}
+			if saveErr := st.SaveTokenUsage(tu); saveErr != nil {
+				log.Printf("mcp: failed to save token usage: %v", saveErr)
 			}
 		}
 		return nil

@@ -137,6 +137,7 @@ func BuildMuxWithRunner(cfg domain.Config, st *store.Store, runner claude.Runner
 		s.registerSessionHandlers(mux)
 		s.registerMessageHandlers(mux)
 		s.registerOpenAIHandlers(mux)
+		s.registerUsageHandlers(mux)
 	}
 	return corsMiddleware(loggingMiddleware(apiKeyMiddleware(cfg.APIKey, mux)))
 }

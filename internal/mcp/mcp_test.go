@@ -772,3 +772,42 @@ func TestMCPServer_AllProfile_ExposesAllTools(t *testing.T) {
 		t.Errorf("expected 13 tools with 'all' profile, got %d", len(tools))
 	}
 }
+
+// ─── Token usage persistence (P4) ────────────────────────────────────────────
+
+func TestMCP_SendMessage_PersistsTokenUsage(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet", WorkDir: t.TempDir()}
+	agent, _ := st.CreateAgent(domain.Agent{Name: "a", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess, _ := st.CreateSession(agent.ID, "")
+
+	mockRunner := func(ctx context.Context, c domain.Config, a *domain.Agent, sessionID, message string, resume bool, onEvent claude.StreamCallback) error {
+		data := `{"type":"result","subtype":"success","result":"ok","session_id":"` + sessionID +
+			`","total_cost_usd":0.003,"usage":{"input_tokens":200,"output_tokens":75,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}`
+		return onEvent("result", []byte(data))
+	}
+
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "send_message",
+		"arguments": map[string]any{"session_id": sess.ID, "content": "hello"},
+	})
+	resp := mcp.HandleMCPRequestWithRunner(req, cfg, st, mockRunner)
+	if isToolError(resp.Result) {
+		t.Fatalf("unexpected tool error: %v", resp.Result)
+	}
+
+	// Verify token usage was persisted (P4)
+	summary, err := st.GetSessionUsage(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionUsage: %v", err)
+	}
+	if summary.TurnCount != 1 {
+		t.Errorf("expected TurnCount 1 after MCP send_message, got %d", summary.TurnCount)
+	}
+	if summary.TotalInputTokens != 200 {
+		t.Errorf("expected TotalInputTokens 200, got %d", summary.TotalInputTokens)
+	}
+	if summary.TotalCostUSD != 0.003 {
+		t.Errorf("expected TotalCostUSD 0.003, got %f", summary.TotalCostUSD)
+	}
+}

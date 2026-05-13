@@ -471,3 +471,24 @@ select:focus { border-color: var(--accent); }
   border-radius: var(--radius);
   align-self: flex-start;
 }
+
+/* ── global stats bar ── */
+.global-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.global-stats:empty { display: none; }
+
+/* ── session usage inline ── */
+.session-usage {
+  margin-top: 4px;
+  min-height: 0;
+}

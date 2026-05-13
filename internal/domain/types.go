@@ -77,6 +77,29 @@ func NewUUID() (string, error) {
 	), nil
 }
 
+// TokenUsage holds per-turn token consumption data persisted to the store.
+type TokenUsage struct {
+	ID                       string  `json:"id"`
+	SessionID                string  `json:"session_id"`
+	AgentID                  string  `json:"agent_id"`
+	CreatedAt                string  `json:"created_at"`
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
+	TotalCostUSD             float64 `json:"total_cost_usd"`
+}
+
+// UsageSummary holds aggregated token usage across one or more turns.
+type UsageSummary struct {
+	TotalInputTokens              int     `json:"total_input_tokens"`
+	TotalOutputTokens             int     `json:"total_output_tokens"`
+	TotalCacheCreationInputTokens int     `json:"total_cache_creation_input_tokens"`
+	TotalCacheReadInputTokens     int     `json:"total_cache_read_input_tokens"`
+	TotalCostUSD                  float64 `json:"total_cost_usd"`
+	TurnCount                     int     `json:"turn_count"`
+}
+
 // SessionMutexMap manages per-session mutexes for concurrent request serialization.
 type SessionMutexMap struct {
 	m sync.Map

@@ -3,8 +3,12 @@ package tui
 import "claudio/internal/domain"
 
 type chatResponseMsg struct {
-	content string
-	cost    float64
+	content      string
+	cost         float64
+	inputTokens  int
+	outputTokens int
+	cacheCreation int
+	cacheRead    int
 }
 
 type chatErrorMsg struct {

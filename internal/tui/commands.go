@@ -4,14 +4,15 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"claudio/internal/service"
 
 	"claudio/internal/claude"
 	"claudio/internal/domain"
+	"claudio/internal/service"
 	"claudio/internal/store"
 )
 
@@ -68,6 +69,7 @@ func sendMessageCmd(cfg domain.Config, st *store.Store, agent *domain.Agent, ses
 	return func() tea.Msg {
 		var response strings.Builder
 		var cost float64
+		var inputTokens, outputTokens, cacheCreation, cacheRead int
 		resume := sess.TurnCount > 0
 		sess.TurnCount++
 		ctx := context.Background()
@@ -84,9 +86,19 @@ func sendMessageCmd(cfg domain.Config, st *store.Store, agent *domain.Agent, ses
 				var r struct {
 					Result string  `json:"result"`
 					Cost   float64 `json:"total_cost_usd"`
+					Usage  struct {
+						InputTokens              int `json:"input_tokens"`
+						OutputTokens             int `json:"output_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					} `json:"usage"`
 				}
 				json.Unmarshal(data, &r) //nolint:errcheck — best-effort cost extraction from optional field
 				cost = r.Cost
+				inputTokens = r.Usage.InputTokens
+				outputTokens = r.Usage.OutputTokens
+				cacheCreation = r.Usage.CacheCreationInputTokens
+				cacheRead = r.Usage.CacheReadInputTokens
 				if response.Len() == 0 && r.Result != "" {
 					response.WriteString(r.Result)
 				}
@@ -103,8 +115,28 @@ func sendMessageCmd(cfg domain.Config, st *store.Store, agent *domain.Agent, ses
 		if !ephemeral {
 			sess.LastActive = time.Now().UTC().Format(time.RFC3339Nano)
 			st.SaveSession(sess) //nolint:errcheck — non-critical; session state is ephemeral
+			// Persist token usage — non-fatal on error (P3, P6, P7).
+			tu := domain.TokenUsage{
+				SessionID:                sess.ID,
+				AgentID:                  agent.ID,
+				InputTokens:              inputTokens,
+				OutputTokens:             outputTokens,
+				CacheCreationInputTokens: cacheCreation,
+				CacheReadInputTokens:     cacheRead,
+				TotalCostUSD:             cost,
+			}
+			if saveErr := st.SaveTokenUsage(tu); saveErr != nil {
+				log.Printf("tui: failed to save token usage: %v", saveErr)
+			}
 		}
-		return chatResponseMsg{content: text, cost: cost}
+		return chatResponseMsg{
+			content:       text,
+			cost:          cost,
+			inputTokens:   inputTokens,
+			outputTokens:  outputTokens,
+			cacheCreation: cacheCreation,
+			cacheRead:     cacheRead,
+		}
 	}
 }
 

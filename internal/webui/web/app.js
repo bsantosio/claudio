@@ -103,9 +103,32 @@ async function renderAgentsScreen(container) {
       <h1>Agents</h1>
       <button class="primary" id="btn-new-agent">+ New agent</button>
     </div>
+    <div id="global-stats" class="global-stats" aria-label="Global usage statistics"></div>
     <div id="agent-list" role="list"><div class="empty">Loading…</div></div>
   `;
   document.getElementById('btn-new-agent').onclick = () => navigate('agents/new');
+
+  // Load global usage stats (non-blocking — failure hides the bar)
+  (async () => {
+    try {
+      const usage = await apiJSON('GET', '/usage');
+      const statsEl = document.getElementById('global-stats');
+      if (!statsEl) return;
+      const totalTokens = (usage.total_input_tokens || 0) + (usage.total_output_tokens || 0)
+        + (usage.total_cache_creation_input_tokens || 0) + (usage.total_cache_read_input_tokens || 0);
+      const cost = usage.total_cost_usd || 0;
+      const turns = usage.turn_count || 0;
+      if (turns === 0 && cost === 0) return; // nothing to show on empty db
+      statsEl.innerHTML = `<span aria-label="Global usage">Global:</span>
+        <span>$${cost.toFixed(4)}</span>
+        <span>·</span>
+        <span>${turns} turns</span>
+        <span>·</span>
+        <span>${formatTokens(totalTokens)} tokens</span>`;
+    } catch (_) {
+      // endpoint not yet available — stay hidden
+    }
+  })();
 
   let agents;
   try {
@@ -351,6 +374,7 @@ async function renderSessionsScreen(container, agentId) {
       <div class="card-body">
         <div class="card-title">${sessionLabel}</div>
         <div class="card-meta">turns: ${s.turn_count} &nbsp;·&nbsp; last active: ${esc(s.last_active || '—')}</div>
+        <div class="session-usage" id="usage-${esc(s.id)}" aria-label="Usage for session ${sessionLabel}"></div>
       </div>
       <div class="card-actions">
         <button class="small" data-action="open" data-id="${esc(s.id)}" aria-label="Open chat for ${sessionLabel}">Open chat</button>
@@ -358,6 +382,23 @@ async function renderSessionsScreen(container, agentId) {
       </div>
     `;
     list.appendChild(card);
+
+    // Fetch usage for this session asynchronously — failure hides badge
+    (async (sid) => {
+      try {
+        const usage = await apiJSON('GET', `/sessions/${sid}/usage`);
+        const el = document.getElementById(`usage-${sid}`);
+        if (!el) return;
+        const totalTokens = (usage.total_input_tokens || 0) + (usage.total_output_tokens || 0)
+          + (usage.total_cache_creation_input_tokens || 0) + (usage.total_cache_read_input_tokens || 0);
+        const cost = usage.total_cost_usd || 0;
+        const turns = usage.turn_count || 0;
+        if (turns === 0 && cost === 0) return;
+        el.innerHTML = `<span class="badge" aria-label="Session cost and tokens">$${cost.toFixed(4)} · ${turns} turns · ${formatTokens(totalTokens)} tokens</span>`;
+      } catch (_) {
+        // endpoint unavailable or session has no usage — stay hidden
+      }
+    })(s.id);
   });
 
   list.addEventListener('click', async e => {
@@ -595,7 +636,8 @@ function appendUsageBadge(container, result) {
 }
 
 function formatTokens(n) {
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
   return String(n);
 }
 

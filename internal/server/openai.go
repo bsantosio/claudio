@@ -241,6 +241,30 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, agen
 			}
 			sendChunk(text, nil)
 		case "result":
+			var resultEv struct {
+				TotalCost float64 `json:"total_cost_usd"`
+				Usage     struct {
+					InputTokens              int `json:"input_tokens"`
+					OutputTokens             int `json:"output_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				} `json:"usage"`
+			}
+			if json.Unmarshal(data, &resultEv) == nil {
+				// Persist token usage — non-fatal on error (P5, P6, P7).
+				tu := domain.TokenUsage{
+					SessionID:                sessionID,
+					AgentID:                  agent.ID,
+					InputTokens:              resultEv.Usage.InputTokens,
+					OutputTokens:             resultEv.Usage.OutputTokens,
+					CacheCreationInputTokens: resultEv.Usage.CacheCreationInputTokens,
+					CacheReadInputTokens:     resultEv.Usage.CacheReadInputTokens,
+					TotalCostUSD:             resultEv.TotalCost,
+				}
+				if saveErr := s.store.SaveTokenUsage(tu); saveErr != nil {
+					log.Printf("openai: failed to save token usage: %v", saveErr)
+				}
+			}
 			stop := "stop"
 			sendChunk("", &stop)
 		}

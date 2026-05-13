@@ -219,6 +219,9 @@ func (m Model) renderChatScreen() string {
 		}
 	}
 	sb.WriteString("\n")
+	if m.sessionCost > 0 {
+		sb.WriteString(dimStyle.Render(fmt.Sprintf("  session cost: $%.6f", m.sessionCost)) + "\n")
+	}
 	if m.waiting {
 		sb.WriteString("  " + m.spinner.View() + " Waiting for response...\n")
 	} else {

@@ -74,6 +74,20 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
+
+CREATE TABLE IF NOT EXISTS token_usage (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cache_creation_input_tokens INTEGER DEFAULT 0,
+    cache_read_input_tokens INTEGER DEFAULT 0,
+    total_cost_usd REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_session_id ON token_usage(session_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_agent_id ON token_usage(agent_id);
 `
 	if _, err := s.db.Exec(ddl); err != nil {
 		return err
@@ -527,6 +541,85 @@ func encodePathForClaude(absPath string) string {
 		}
 	}
 	return string(result)
+}
+
+// ─── Token usage methods ──────────────────────────────────────────────────────
+
+// SaveTokenUsage inserts one token_usage row. If tu.ID is empty a new UUIDv4
+// is generated. If tu.CreatedAt is empty the current UTC time is used.
+func (s *Store) SaveTokenUsage(tu domain.TokenUsage) error {
+	if tu.ID == "" {
+		id, err := domain.NewUUID()
+		if err != nil {
+			return fmt.Errorf("generate token_usage id: %w", err)
+		}
+		tu.ID = id
+	}
+	if tu.CreatedAt == "" {
+		tu.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO token_usage
+		 (id, session_id, agent_id, created_at, input_tokens, output_tokens,
+		  cache_creation_input_tokens, cache_read_input_tokens, total_cost_usd)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tu.ID, tu.SessionID, tu.AgentID, tu.CreatedAt,
+		tu.InputTokens, tu.OutputTokens,
+		tu.CacheCreationInputTokens, tu.CacheReadInputTokens,
+		tu.TotalCostUSD,
+	)
+	if err != nil {
+		return fmt.Errorf("insert token_usage: %w", err)
+	}
+	return nil
+}
+
+// GetSessionUsage returns summed token usage for all rows belonging to sessionID.
+// Returns a zero-value UsageSummary (not nil) when no rows exist.
+func (s *Store) GetSessionUsage(sessionID string) (*domain.UsageSummary, error) {
+	return s.queryUsageSummary(
+		`SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		        COALESCE(SUM(cache_creation_input_tokens),0), COALESCE(SUM(cache_read_input_tokens),0),
+		        COALESCE(SUM(total_cost_usd),0)
+		 FROM token_usage WHERE session_id = ?`, sessionID)
+}
+
+// GetAgentUsage returns summed token usage for all rows belonging to agentID.
+// Returns a zero-value UsageSummary (not nil) when no rows exist.
+func (s *Store) GetAgentUsage(agentID string) (*domain.UsageSummary, error) {
+	return s.queryUsageSummary(
+		`SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		        COALESCE(SUM(cache_creation_input_tokens),0), COALESCE(SUM(cache_read_input_tokens),0),
+		        COALESCE(SUM(total_cost_usd),0)
+		 FROM token_usage WHERE agent_id = ?`, agentID)
+}
+
+// GetGlobalUsage returns summed token usage across all rows.
+// Returns a zero-value UsageSummary (not nil) when no rows exist.
+func (s *Store) GetGlobalUsage() (*domain.UsageSummary, error) {
+	return s.queryUsageSummary(
+		`SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		        COALESCE(SUM(cache_creation_input_tokens),0), COALESCE(SUM(cache_read_input_tokens),0),
+		        COALESCE(SUM(total_cost_usd),0)
+		 FROM token_usage`)
+}
+
+// queryUsageSummary runs a pre-built aggregation SELECT and scans the single result row.
+func (s *Store) queryUsageSummary(query string, args ...any) (*domain.UsageSummary, error) {
+	row := s.db.QueryRow(query, args...)
+	var sum domain.UsageSummary
+	err := row.Scan(
+		&sum.TurnCount,
+		&sum.TotalInputTokens,
+		&sum.TotalOutputTokens,
+		&sum.TotalCacheCreationInputTokens,
+		&sum.TotalCacheReadInputTokens,
+		&sum.TotalCostUSD,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query usage summary: %w", err)
+	}
+	return &sum, nil
 }
 
 func ExtractContentText(raw json.RawMessage) string {

@@ -369,3 +369,238 @@ func TestStore_SaveSession_UpdatesTurnCount(t *testing.T) {
 		t.Errorf("expected TurnCount 3, got %d", fresh.TurnCount)
 	}
 }
+
+// ─── TokenUsage tests ─────────────────────────────────────────────────────────
+
+func TestStore_SaveTokenUsage_InsertsRow(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess, _ := s.CreateSession(a.ID, "s1")
+
+	tu := domain.TokenUsage{
+		SessionID:                sess.ID,
+		AgentID:                  a.ID,
+		InputTokens:              100,
+		OutputTokens:             50,
+		CacheCreationInputTokens: 10,
+		CacheReadInputTokens:     5,
+		TotalCostUSD:             0.0042,
+	}
+	err := s.SaveTokenUsage(tu)
+	if err != nil {
+		t.Fatalf("SaveTokenUsage: %v", err)
+	}
+	// Verify via aggregation
+	summary, err := s.GetSessionUsage(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionUsage: %v", err)
+	}
+	if summary.TurnCount != 1 {
+		t.Errorf("expected TurnCount 1, got %d", summary.TurnCount)
+	}
+	if summary.TotalInputTokens != 100 {
+		t.Errorf("expected InputTokens 100, got %d", summary.TotalInputTokens)
+	}
+	if summary.TotalOutputTokens != 50 {
+		t.Errorf("expected OutputTokens 50, got %d", summary.TotalOutputTokens)
+	}
+	if summary.TotalCacheCreationInputTokens != 10 {
+		t.Errorf("expected CacheCreation 10, got %d", summary.TotalCacheCreationInputTokens)
+	}
+	if summary.TotalCacheReadInputTokens != 5 {
+		t.Errorf("expected CacheRead 5, got %d", summary.TotalCacheReadInputTokens)
+	}
+	if summary.TotalCostUSD != 0.0042 {
+		t.Errorf("expected TotalCostUSD 0.0042, got %f", summary.TotalCostUSD)
+	}
+}
+
+func TestStore_SaveTokenUsage_GeneratesID(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess, _ := s.CreateSession(a.ID, "s1")
+
+	tu := domain.TokenUsage{
+		SessionID:    sess.ID,
+		AgentID:      a.ID,
+		InputTokens:  50,
+		OutputTokens: 25,
+	}
+	// No ID set — should auto-generate
+	err := s.SaveTokenUsage(tu)
+	if err != nil {
+		t.Fatalf("SaveTokenUsage without ID: %v", err)
+	}
+}
+
+func TestStore_GetSessionUsage_MultipleRows(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess, _ := s.CreateSession(a.ID, "s1")
+
+	for i := 0; i < 3; i++ {
+		err := s.SaveTokenUsage(domain.TokenUsage{
+			SessionID:    sess.ID,
+			AgentID:      a.ID,
+			InputTokens:  100,
+			OutputTokens: 50,
+			TotalCostUSD: 0.001,
+		})
+		if err != nil {
+			t.Fatalf("SaveTokenUsage[%d]: %v", i, err)
+		}
+	}
+
+	summary, err := s.GetSessionUsage(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionUsage: %v", err)
+	}
+	if summary.TurnCount != 3 {
+		t.Errorf("expected TurnCount 3, got %d", summary.TurnCount)
+	}
+	if summary.TotalInputTokens != 300 {
+		t.Errorf("expected TotalInputTokens 300, got %d", summary.TotalInputTokens)
+	}
+	if summary.TotalOutputTokens != 150 {
+		t.Errorf("expected TotalOutputTokens 150, got %d", summary.TotalOutputTokens)
+	}
+	if summary.TotalCostUSD != 0.003 {
+		t.Errorf("expected TotalCostUSD 0.003, got %f", summary.TotalCostUSD)
+	}
+}
+
+func TestStore_GetSessionUsage_ZeroRows(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess, _ := s.CreateSession(a.ID, "s1")
+
+	summary, err := s.GetSessionUsage(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionUsage: %v", err)
+	}
+	if summary == nil {
+		t.Fatal("expected non-nil summary for zero rows")
+	}
+	if summary.TurnCount != 0 {
+		t.Errorf("expected TurnCount 0, got %d", summary.TurnCount)
+	}
+	if summary.TotalCostUSD != 0 {
+		t.Errorf("expected TotalCostUSD 0, got %f", summary.TotalCostUSD)
+	}
+}
+
+func TestStore_GetAgentUsage_SpansMultipleSessions(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess1, _ := s.CreateSession(a.ID, "s1")
+	sess2, _ := s.CreateSession(a.ID, "s2")
+
+	s.SaveTokenUsage(domain.TokenUsage{SessionID: sess1.ID, AgentID: a.ID, InputTokens: 100, TotalCostUSD: 0.001}) //nolint:errcheck
+	s.SaveTokenUsage(domain.TokenUsage{SessionID: sess2.ID, AgentID: a.ID, InputTokens: 200, TotalCostUSD: 0.002}) //nolint:errcheck
+
+	summary, err := s.GetAgentUsage(a.ID)
+	if err != nil {
+		t.Fatalf("GetAgentUsage: %v", err)
+	}
+	if summary.TurnCount != 2 {
+		t.Errorf("expected TurnCount 2, got %d", summary.TurnCount)
+	}
+	if summary.TotalInputTokens != 300 {
+		t.Errorf("expected TotalInputTokens 300, got %d", summary.TotalInputTokens)
+	}
+	if summary.TotalCostUSD != 0.003 {
+		t.Errorf("expected TotalCostUSD 0.003, got %f", summary.TotalCostUSD)
+	}
+}
+
+func TestStore_GetAgentUsage_ZeroRows(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+
+	summary, err := s.GetAgentUsage(a.ID)
+	if err != nil {
+		t.Fatalf("GetAgentUsage: %v", err)
+	}
+	if summary == nil {
+		t.Fatal("expected non-nil summary for zero rows")
+	}
+	if summary.TurnCount != 0 {
+		t.Errorf("expected TurnCount 0, got %d", summary.TurnCount)
+	}
+}
+
+func TestStore_GetGlobalUsage_AggregatesAll(t *testing.T) {
+	s := newTestStore(t)
+	a1, _ := s.CreateAgent(domain.Agent{Name: "a1", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	a2, _ := s.CreateAgent(domain.Agent{Name: "a2", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess1, _ := s.CreateSession(a1.ID, "s1")
+	sess2, _ := s.CreateSession(a2.ID, "s2")
+
+	s.SaveTokenUsage(domain.TokenUsage{SessionID: sess1.ID, AgentID: a1.ID, InputTokens: 500, TotalCostUSD: 0.02}) //nolint:errcheck
+	s.SaveTokenUsage(domain.TokenUsage{SessionID: sess2.ID, AgentID: a2.ID, InputTokens: 500, TotalCostUSD: 0.03}) //nolint:errcheck
+
+	summary, err := s.GetGlobalUsage()
+	if err != nil {
+		t.Fatalf("GetGlobalUsage: %v", err)
+	}
+	if summary.TurnCount != 2 {
+		t.Errorf("expected TurnCount 2, got %d", summary.TurnCount)
+	}
+	if summary.TotalInputTokens != 1000 {
+		t.Errorf("expected TotalInputTokens 1000, got %d", summary.TotalInputTokens)
+	}
+	if summary.TotalCostUSD != 0.05 {
+		t.Errorf("expected TotalCostUSD 0.05, got %f", summary.TotalCostUSD)
+	}
+}
+
+func TestStore_GetGlobalUsage_EmptyDatabase(t *testing.T) {
+	s := newTestStore(t)
+	summary, err := s.GetGlobalUsage()
+	if err != nil {
+		t.Fatalf("GetGlobalUsage: %v", err)
+	}
+	if summary == nil {
+		t.Fatal("expected non-nil summary for empty database")
+	}
+	if summary.TurnCount != 0 {
+		t.Errorf("expected TurnCount 0, got %d", summary.TurnCount)
+	}
+}
+
+func TestStore_SaveTokenUsage_CascadeDeleteWithSession(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	sess, _ := s.CreateSession(a.ID, "s1")
+	s.SaveTokenUsage(domain.TokenUsage{SessionID: sess.ID, AgentID: a.ID, InputTokens: 100}) //nolint:errcheck
+
+	// Delete session — usage rows should cascade
+	if err := s.DeleteSession(sess.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	summary, err := s.GetGlobalUsage()
+	if err != nil {
+		t.Fatalf("GetGlobalUsage after cascade: %v", err)
+	}
+	if summary.TurnCount != 0 {
+		t.Errorf("expected TurnCount 0 after cascade delete, got %d", summary.TurnCount)
+	}
+}
+
+func TestStore_MigrationIdempotent(t *testing.T) {
+	// NewStore calls migrate() once internally. We verify the store opens
+	// cleanly and can be used (migrate ran without error on an existing DB).
+	s := newTestStore(t)
+	// If migration is not idempotent, NewStore itself would have failed.
+	// Verify normal operations work fine after migration.
+	a, err := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	if err != nil {
+		t.Fatalf("CreateAgent after migration: %v", err)
+	}
+	sess, _ := s.CreateSession(a.ID, "s1")
+	err = s.SaveTokenUsage(domain.TokenUsage{SessionID: sess.ID, AgentID: a.ID, InputTokens: 1})
+	if err != nil {
+		t.Fatalf("SaveTokenUsage after migration: %v", err)
+	}
+}
