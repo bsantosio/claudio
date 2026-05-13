@@ -1,0 +1,28 @@
+# Binary
+/claudio
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test output
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+
+# Data
+data/
+*.db
