@@ -128,10 +128,13 @@ async function renderAgentsScreen(container) {
     const card = document.createElement('div');
     card.className = 'card';
     card.setAttribute('role', 'listitem');
+    const subAgentsBadges = (a.sub_agents && a.sub_agents.length)
+      ? a.sub_agents.map(s => `<span class="badge">${esc(s)}</span>`).join(' ')
+      : '';
     card.innerHTML = `
       <div class="card-body">
         <div class="card-title">${esc(a.name)}</div>
-        <div class="card-meta">id: ${esc(a.id)} &nbsp;·&nbsp; model: ${esc(a.model)}</div>
+        <div class="card-meta">id: ${esc(a.id)} &nbsp;·&nbsp; model: ${esc(a.model)}${subAgentsBadges ? ' &nbsp;·&nbsp; sub-agents: ' + subAgentsBadges : ''}</div>
       </div>
       <div class="card-actions">
         <button class="small" data-action="sessions" data-id="${esc(a.id)}" aria-label="View sessions for ${esc(a.name)}">Sessions</button>
@@ -225,6 +228,11 @@ async function renderNewAgentScreen(container) {
         <option value="claude-opus-4-6[1m]">claude-opus-4-6[1m]</option>
       </select>
     </div>
+    <div class="form-group">
+      <label for="ag-sub-agents">Sub-Agents</label>
+      <input type="text" id="ag-sub-agents" placeholder="code-reviewer, test-engineer, doc-writer" aria-label="Sub-agent names, comma separated">
+      <small class="form-hint">Names of installed Claude Code agents this agent can delegate to. Comma-separated.</small>
+    </div>
     <div class="form-actions">
       <button class="primary" id="btn-create-agent">Create</button>
       <button id="btn-cancel-agent">Cancel</button>
@@ -252,6 +260,9 @@ async function renderNewAgentScreen(container) {
           if (opt.value === generated.model) { opt.selected = true; break; }
         }
       }
+      if (generated.sub_agents && generated.sub_agents.length) {
+        document.getElementById('ag-sub-agents').value = generated.sub_agents.join(', ');
+      }
       statusEl.innerHTML = '<span style="color:var(--accent2)">✓ Generated! Review and edit below, then click Create.</span>';
     } catch (e) {
       statusEl.innerHTML = '<span style="color:var(--danger)">Error: ' + esc(e.message) + '</span>';
@@ -267,11 +278,13 @@ async function renderNewAgentScreen(container) {
     const name = document.getElementById('ag-name').value.trim();
     const prompt = document.getElementById('ag-prompt').value.trim();
     const model = document.getElementById('ag-model').value.trim() || 'sonnet';
+    const subAgentsStr = document.getElementById('ag-sub-agents').value.trim();
+    const subAgents = subAgentsStr ? subAgentsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
     const errEl = document.getElementById('ag-error');
     errEl.style.display = 'none';
     if (!name) { showFieldError(errEl, 'Name is required.'); return; }
     try {
-      await apiJSON('POST', '/agents', { name, system_prompt: prompt, model });
+      await apiJSON('POST', '/agents', { name, system_prompt: prompt, model, sub_agents: subAgents });
       navigate('agents');
     } catch (e) {
       showFieldError(errEl, e.message);

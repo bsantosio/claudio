@@ -179,6 +179,37 @@ func TestMCP_ToolsCall_CreateAgent_Success(t *testing.T) {
 	}
 }
 
+func TestMCP_ToolsCall_CreateAgent_WithSubAgents(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	req := mcpRequest("tools/call", map[string]any{
+		"name": "create_agent",
+		"arguments": map[string]any{
+			"name":          "orchestrator",
+			"system_prompt": "You coordinate work.",
+			"sub_agents":    []any{"code-reviewer", "test-engineer"},
+		},
+	})
+	resp := mcp.HandleMCPRequest(req, cfg, st)
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("unexpected failure: %+v", resp)
+	}
+	content := extractMCPContent(t, resp.Result)
+	if !strings.Contains(content, "orchestrator") {
+		t.Errorf("expected agent name in response, got: %s", content)
+	}
+	agents, err := st.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if len(agents[0].SubAgents) != 2 {
+		t.Errorf("expected 2 sub-agents, got %d: %v", len(agents[0].SubAgents), agents[0].SubAgents)
+	}
+}
+
 func TestMCP_ToolsCall_CreateAgent_MissingName(t *testing.T) {
 	st := newMCPStore(t)
 	cfg := domain.Config{DefaultModel: "sonnet"}

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS agents (
     allowed_tools TEXT DEFAULT '',
     disallowed_tools TEXT DEFAULT '',
     mcp_config TEXT DEFAULT '',
+    sub_agents TEXT DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -71,10 +72,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
-
 `
-	_, err := s.db.Exec(ddl)
-	return err
+	if _, err := s.db.Exec(ddl); err != nil {
+		return err
+	}
+	// Migration: add sub_agents column for existing databases (fails silently if already exists)
+	s.db.Exec(`ALTER TABLE agents ADD COLUMN sub_agents TEXT DEFAULT ''`)
+	return nil
 }
 
 // withTx runs fn inside a database transaction. If fn returns an error, the
@@ -124,12 +128,16 @@ func (s *Store) CreateAgent(input domain.Agent, defaultModel string) (*domain.Ag
 	if err != nil {
 		return nil, err
 	}
+	subAgentsJSON, err := json.Marshal(input.SubAgents)
+	if err != nil {
+		return nil, err
+	}
 	_, err = s.db.Exec(
-		`INSERT INTO agents (id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, sub_agents, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, input.Name, input.SystemPrompt, model,
 		input.MaxTurns, input.PermissionMode,
-		string(allowedJSON), string(disallowedJSON), string(mcpJSON),
+		string(allowedJSON), string(disallowedJSON), string(mcpJSON), string(subAgentsJSON),
 		now, now,
 	)
 	if err != nil {
@@ -144,6 +152,7 @@ func (s *Store) CreateAgent(input domain.Agent, defaultModel string) (*domain.Ag
 		PermissionMode:  input.PermissionMode,
 		AllowedTools:    input.AllowedTools,
 		DisallowedTools: input.DisallowedTools,
+		SubAgents:       input.SubAgents,
 		MCPConfig:       input.MCPConfig,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -152,7 +161,7 @@ func (s *Store) CreateAgent(input domain.Agent, defaultModel string) (*domain.Ag
 
 func (s *Store) GetAgent(id string) (*domain.Agent, bool) {
 	row := s.db.QueryRow(
-		`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, created_at, updated_at
+		`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, sub_agents, created_at, updated_at
 		 FROM agents WHERE id = ?`, id)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -166,7 +175,7 @@ func (s *Store) GetAgent(id string) (*domain.Agent, bool) {
 
 func (s *Store) ListAgents() ([]*domain.Agent, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, created_at, updated_at
+		`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, sub_agents, created_at, updated_at
 		 FROM agents ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
@@ -194,7 +203,7 @@ func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) 
 	err := s.withTx(func(tx *sql.Tx) error {
 		// Read within transaction
 		row := tx.QueryRow(
-			`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, created_at, updated_at
+			`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, sub_agents, created_at, updated_at
 			 FROM agents WHERE id = ?`, id)
 		existing, err := scanAgent(row)
 		if err != nil {
@@ -223,6 +232,9 @@ func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) 
 		if input.DisallowedTools != nil {
 			existing.DisallowedTools = input.DisallowedTools
 		}
+		if input.SubAgents != nil {
+			existing.SubAgents = input.SubAgents
+		}
 		if input.MCPConfig != nil {
 			existing.MCPConfig = input.MCPConfig
 		}
@@ -246,13 +258,17 @@ func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) 
 		if err != nil {
 			return fmt.Errorf("marshal mcp_config: %w", err)
 		}
+		subAgentsJSON, err := json.Marshal(existing.SubAgents)
+		if err != nil {
+			return fmt.Errorf("marshal sub_agents: %w", err)
+		}
 
 		_, err = tx.Exec(
-			`UPDATE agents SET name=?, system_prompt=?, model=?, max_turns=?, permission_mode=?, allowed_tools=?, disallowed_tools=?, mcp_config=?, updated_at=?
+			`UPDATE agents SET name=?, system_prompt=?, model=?, max_turns=?, permission_mode=?, allowed_tools=?, disallowed_tools=?, mcp_config=?, sub_agents=?, updated_at=?
 			 WHERE id=?`,
 			existing.Name, existing.SystemPrompt, existing.Model,
 			existing.MaxTurns, existing.PermissionMode,
-			string(allowedJSON), string(disallowedJSON), string(mcpJSON),
+			string(allowedJSON), string(disallowedJSON), string(mcpJSON), string(subAgentsJSON),
 			existing.UpdatedAt, id,
 		)
 		if err != nil {
@@ -299,11 +315,11 @@ type agentScanner interface {
 
 func scanAgent(row agentScanner) (*domain.Agent, error) {
 	var a domain.Agent
-	var allowedJSON, disallowedJSON, mcpJSON string
+	var allowedJSON, disallowedJSON, mcpJSON, subAgentsJSON string
 	err := row.Scan(
 		&a.ID, &a.Name, &a.SystemPrompt, &a.Model,
 		&a.MaxTurns, &a.PermissionMode,
-		&allowedJSON, &disallowedJSON, &mcpJSON,
+		&allowedJSON, &disallowedJSON, &mcpJSON, &subAgentsJSON,
 		&a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
@@ -322,6 +338,11 @@ func scanAgent(row agentScanner) (*domain.Agent, error) {
 	if mcpJSON != "" && mcpJSON != "null" {
 		if err := json.Unmarshal([]byte(mcpJSON), &a.MCPConfig); err != nil {
 			return nil, fmt.Errorf("unmarshal mcp_config: %w", err)
+		}
+	}
+	if subAgentsJSON != "" && subAgentsJSON != "null" {
+		if err := json.Unmarshal([]byte(subAgentsJSON), &a.SubAgents); err != nil {
+			return nil, fmt.Errorf("unmarshal sub_agents: %w", err)
 		}
 	}
 	return &a, nil

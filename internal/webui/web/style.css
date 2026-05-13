@@ -306,6 +306,15 @@ header nav a:hover { color: var(--text); }
 }
 .badge.green { color: var(--accent2); border-color: var(--accent2); }
 
+/* ── form hint ── */
+
+.form-hint {
+  display: block;
+  font-size: 0.8em;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
 /* ── empty state ── */
 
 .empty {

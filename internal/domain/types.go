@@ -27,6 +27,7 @@ type Agent struct {
 	PermissionMode  string         `json:"permission_mode,omitempty"`
 	AllowedTools    []string       `json:"allowed_tools,omitempty"`
 	DisallowedTools []string       `json:"disallowed_tools,omitempty"`
+	SubAgents       []string       `json:"sub_agents,omitempty"`
 	MCPConfig       map[string]any `json:"mcp_config,omitempty"`
 	CreatedAt       string         `json:"created_at"`
 	UpdatedAt       string         `json:"updated_at"`

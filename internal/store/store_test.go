@@ -106,6 +106,54 @@ func TestStore_CreateAgent_WithTools(t *testing.T) {
 	}
 }
 
+func TestStore_CreateAgent_WithSubAgents(t *testing.T) {
+	s := newTestStore(t)
+	input := domain.Agent{
+		Name:         "orchestrator",
+		SystemPrompt: "You coordinate sub-agents.",
+		Model:        "sonnet",
+		SubAgents:    []string{"code-reviewer", "test-engineer"},
+	}
+	a, err := s.CreateAgent(input, "sonnet")
+	if err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if len(a.SubAgents) != 2 {
+		t.Errorf("expected 2 sub-agents on create result, got %d", len(a.SubAgents))
+	}
+	if a.SubAgents[0] != "code-reviewer" {
+		t.Errorf("expected sub-agent[0] 'code-reviewer', got %q", a.SubAgents[0])
+	}
+
+	// Verify sub_agents persists through GetAgent
+	got, ok := s.GetAgent(a.ID)
+	if !ok {
+		t.Fatal("GetAgent returned false")
+	}
+	if len(got.SubAgents) != 2 {
+		t.Errorf("expected 2 sub-agents from GetAgent, got %d", len(got.SubAgents))
+	}
+	if got.SubAgents[1] != "test-engineer" {
+		t.Errorf("expected sub-agent[1] 'test-engineer', got %q", got.SubAgents[1])
+	}
+}
+
+func TestStore_UpdateAgent_SubAgents(t *testing.T) {
+	s := newTestStore(t)
+	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	updated, err := s.UpdateAgent(a.ID, domain.Agent{SubAgents: []string{"helper"}}, "sonnet")
+	if err != nil {
+		t.Fatalf("UpdateAgent: %v", err)
+	}
+	if len(updated.SubAgents) != 1 || updated.SubAgents[0] != "helper" {
+		t.Errorf("expected sub-agents [helper] after update, got %v", updated.SubAgents)
+	}
+	got, _ := s.GetAgent(a.ID)
+	if len(got.SubAgents) != 1 || got.SubAgents[0] != "helper" {
+		t.Errorf("expected persisted sub-agents [helper], got %v", got.SubAgents)
+	}
+}
+
 func TestStore_GetAgent_NotFound(t *testing.T) {
 	s := newTestStore(t)
 	_, ok := s.GetAgent("nonexistent")

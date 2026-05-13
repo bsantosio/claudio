@@ -237,6 +237,7 @@ func mcpTools(allowed map[string]bool) []map[string]any {
 					"system_prompt":   map[string]any{"type": "string", "description": "System prompt defining the agent's behavior"},
 					"model":           map[string]any{"type": "string", "description": "Model to use: sonnet, haiku, opus", "default": "sonnet"},
 					"allowed_tools":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Claude CLI tools the agent can use (e.g. Bash, Read, Edit)"},
+					"sub_agents":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Names of sub-agents this agent can delegate to (e.g. code-reviewer, test-engineer). The Agent tool is auto-included when sub-agents are defined."},
 					"max_turns":       map[string]any{"type": "integer", "description": "Maximum conversation turns per message"},
 					"permission_mode": map[string]any{"type": "string", "description": "Permission mode: plan, auto-accept, or bypass"},
 				},
@@ -359,11 +360,19 @@ func toolCreateAgent(args map[string]any, cfg domain.Config, st *store.Store) ma
 			}
 		}
 	}
+	var subAgents []string
+	if raw, ok := args["sub_agents"].([]any); ok {
+		for _, v := range raw {
+			if s, ok := v.(string); ok {
+				subAgents = append(subAgents, s)
+			}
+		}
+	}
 	var maxTurns int
 	if v, ok := args["max_turns"].(float64); ok {
 		maxTurns = int(v)
 	}
-	input := domain.Agent{Name: name, SystemPrompt: systemPrompt, Model: model, AllowedTools: allowedTools, MaxTurns: maxTurns, PermissionMode: permissionMode}
+	input := domain.Agent{Name: name, SystemPrompt: systemPrompt, Model: model, AllowedTools: allowedTools, SubAgents: subAgents, MaxTurns: maxTurns, PermissionMode: permissionMode}
 	agent, err := st.CreateAgent(input, cfg.DefaultModel)
 	if err != nil {
 		return toolError(err.Error())
