@@ -16,10 +16,11 @@ func sessionDisplayName(s *domain.Session) string {
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	return string(runes[:maxLen-1]) + "…"
 }
 
 func relativeTime(ts string) string {
@@ -58,16 +59,3 @@ func renderMsgHistory(msgs []domain.Message) string {
 	return sb.String()
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

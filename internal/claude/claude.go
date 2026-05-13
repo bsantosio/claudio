@@ -78,7 +78,7 @@ func BuildClaudeArgs(agent *domain.Agent, sessionID, message string, resume bool
 	} else {
 		args = append(args, "--session-id", sessionID, "--system-prompt", agent.SystemPrompt)
 	}
-	args = append(args, message)
+	args = append(args, "--", message)
 	if len(agent.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(agent.AllowedTools, ","))
 	}

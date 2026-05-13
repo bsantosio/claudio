@@ -3,7 +3,9 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -121,9 +123,13 @@ func (s *Server) openaiCompletionsHandler() http.HandlerFunc {
 		}
 		var agent *domain.Agent
 		if agentID := r.Header.Get("X-Agent-Id"); agentID != "" {
-			a, ok := s.store.GetAgent(agentID)
-			if !ok {
-				WriteError(w, http.StatusNotFound, "agent not found")
+			a, err := s.store.GetAgent(agentID)
+			if err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					WriteError(w, http.StatusNotFound, "agent not found")
+				} else {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+				}
 				return
 			}
 			agent = a
@@ -155,9 +161,9 @@ func (s *Server) openaiCompletionsHandler() http.HandlerFunc {
 			if msg.Role == "system" {
 				continue
 			}
-			promptParts = append(promptParts, msg.Content)
+			promptParts = append(promptParts, fmt.Sprintf("[%s]: %s", msg.Role, msg.Content))
 		}
-		prompt := strings.Join(promptParts, "\n")
+		prompt := strings.Join(promptParts, "\n\n")
 		if strings.TrimSpace(prompt) == "" {
 			WriteError(w, http.StatusBadRequest, "no user message found")
 			return
@@ -168,11 +174,13 @@ func (s *Server) openaiCompletionsHandler() http.HandlerFunc {
 			return
 		}
 		resume := false
+		var activeSession *domain.Session
 		if sid := r.Header.Get("X-Session-Id"); sid != "" {
-			if sess, ok := s.store.GetSession(sid); ok {
+			if sess, err := s.store.GetSession(sid); err == nil {
 				sessionID = sess.ID
 				resume = sess.TurnCount > 0
 				sess.TurnCount++
+				activeSession = sess
 			}
 		}
 		completionID := "chatcmpl-" + sessionID
@@ -183,6 +191,11 @@ func (s *Server) openaiCompletionsHandler() http.HandlerFunc {
 			s.handleOpenAIStream(w, r, agent, sessionID, prompt, resume, completionID, created)
 		} else {
 			s.handleOpenAISync(w, r, agent, sessionID, prompt, resume, completionID, created)
+		}
+		if activeSession != nil {
+			if err := s.store.SaveSession(activeSession); err != nil {
+				log.Printf("failed to save openai session: %v", err)
+			}
 		}
 	}
 }
@@ -215,7 +228,7 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, agen
 		}
 	}
 	ctx := r.Context()
-	s.runner(ctx, s.cfg, agent, sessionID, prompt, resume, func(eventType string, data []byte) error {
+	err := s.runner(ctx, s.cfg, agent, sessionID, prompt, resume, func(eventType string, data []byte) error {
 		switch eventType {
 		case "assistant":
 			ev, err := claude.ParseNDJSON(string(data))
@@ -233,6 +246,13 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, agen
 		}
 		return nil
 	})
+	if err != nil {
+		errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Fprintf(w, "data: %s\n\n", errJSON)
+		if canFlush {
+			flusher.Flush()
+		}
+	}
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	if canFlush {
 		flusher.Flush()

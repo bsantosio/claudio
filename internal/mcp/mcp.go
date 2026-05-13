@@ -395,9 +395,9 @@ func toolGetAgent(args map[string]any, st *store.Store) map[string]any {
 	if err != nil {
 		return toolError(err.Error())
 	}
-	agent, ok := st.GetAgent(id)
-	if !ok {
-		return toolError("agent not found: " + id)
+	agent, err := st.GetAgent(id)
+	if err != nil {
+		return toolError(err.Error())
 	}
 	b, _ := json.Marshal(agent)
 	return toolResult(string(b))
@@ -411,7 +411,8 @@ func toolDeleteAgent(args map[string]any, st *store.Store) map[string]any {
 	if err := st.DeleteAgent(id); err != nil {
 		return toolError(err.Error())
 	}
-	return toolResult(`{"deleted":true,"id":"` + id + `"}`)
+	b, _ := json.Marshal(map[string]any{"deleted": true, "id": id})
+	return toolResult(string(b))
 }
 
 func toolCreateSession(args map[string]any, st *store.Store) map[string]any {
@@ -420,8 +421,8 @@ func toolCreateSession(args map[string]any, st *store.Store) map[string]any {
 		return toolError(err.Error())
 	}
 	name := optionalString(args, "name")
-	if _, ok := st.GetAgent(agentID); !ok {
-		return toolError("agent not found: " + agentID)
+	if _, err := st.GetAgent(agentID); err != nil {
+		return toolError(err.Error())
 	}
 	sess, err := st.CreateSession(agentID, name)
 	if err != nil {
@@ -453,12 +454,12 @@ func toolSendMessage(args map[string]any, cfg domain.Config, st *store.Store, ru
 	if err != nil {
 		return toolError(err.Error())
 	}
-	sess, ok := st.GetSession(sessionID)
-	if !ok {
-		return toolError("session not found: " + sessionID)
+	sess, err := st.GetSession(sessionID)
+	if err != nil {
+		return toolError(err.Error())
 	}
-	agent, ok := st.GetAgent(sess.AgentID)
-	if !ok {
+	agent, err := st.GetAgent(sess.AgentID)
+	if err != nil {
 		return toolError("agent not found for session")
 	}
 	mu := st.Mutexes.Get(sess.ID)
@@ -529,7 +530,8 @@ func toolDeleteSession(args map[string]any, st *store.Store) map[string]any {
 	if err := st.DeleteSession(id); err != nil {
 		return toolError(err.Error())
 	}
-	return toolResult(`{"deleted":true,"id":"` + id + `"}`)
+	b, _ := json.Marshal(map[string]any{"deleted": true, "id": id})
+	return toolResult(string(b))
 }
 
 func toolInstallAgent(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
@@ -537,15 +539,16 @@ func toolInstallAgent(args map[string]any, cfg domain.Config, st *store.Store) m
 	if err != nil {
 		return toolError(err.Error())
 	}
-	agent, ok := st.GetAgent(id)
-	if !ok {
-		return toolError("agent not found: " + id)
+	agent, err := st.GetAgent(id)
+	if err != nil {
+		return toolError(err.Error())
 	}
 	if err := domain.InstallAgent(agent, cfg.WorkDir); err != nil {
 		return toolError(err.Error())
 	}
 	filename := domain.SanitizeName(agent.Name) + ".md"
-	return toolResult(`{"installed":true,"agent":"` + agent.Name + `","path":".claude/agents/` + filename + `"}`)
+	b, _ := json.Marshal(map[string]any{"installed": true, "agent": agent.Name, "path": ".claude/agents/" + filename})
+	return toolResult(string(b))
 }
 
 func toolUninstallAgent(args map[string]any, cfg domain.Config, st *store.Store) map[string]any {
@@ -553,14 +556,15 @@ func toolUninstallAgent(args map[string]any, cfg domain.Config, st *store.Store)
 	if err != nil {
 		return toolError(err.Error())
 	}
-	agent, ok := st.GetAgent(id)
-	if !ok {
-		return toolError("agent not found: " + id)
+	agent, err := st.GetAgent(id)
+	if err != nil {
+		return toolError(err.Error())
 	}
 	if err := domain.UninstallAgent(agent, cfg.WorkDir); err != nil {
 		return toolError(err.Error())
 	}
-	return toolResult(`{"uninstalled":true,"agent":"` + agent.Name + `"}`)
+	b, _ := json.Marshal(map[string]any{"uninstalled": true, "agent": agent.Name})
+	return toolResult(string(b))
 }
 
 func toolListTemplates() map[string]any {

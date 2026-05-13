@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,15 +10,20 @@ import (
 	"time"
 
 	"claudio/internal/claude"
+	"claudio/internal/domain"
 	"claudio/internal/store"
 )
 
 func (s *Server) registerMessageHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sessions/{sid}/message", func(w http.ResponseWriter, r *http.Request) {
 		sid := r.PathValue("sid")
-		sess, ok := s.store.GetSession(sid)
-		if !ok {
-			WriteError(w, http.StatusNotFound, "session not found")
+		sess, err := s.store.GetSession(sid)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "session not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		var input struct {
@@ -31,9 +37,13 @@ func (s *Server) registerMessageHandlers(mux *http.ServeMux) {
 			WriteError(w, http.StatusBadRequest, "content is required")
 			return
 		}
-		agent, ok := s.store.GetAgent(sess.AgentID)
-		if !ok {
-			WriteError(w, http.StatusNotFound, "agent not found for session")
+		agent, err := s.store.GetAgent(sess.AgentID)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "agent not found for session")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		mu := s.store.Mutexes.Get(sess.ID)
@@ -48,7 +58,7 @@ func (s *Server) registerMessageHandlers(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusOK)
 		flusher, canFlush := w.(http.Flusher)
 		ctx := r.Context()
-		err := s.runner(ctx, s.cfg, agent, sess.ID, input.Content, resume, func(eventType string, data []byte) error {
+		err = s.runner(ctx, s.cfg, agent, sess.ID, input.Content, resume, func(eventType string, data []byte) error {
 			var sseEvent string
 			switch eventType {
 			case "system":
@@ -146,8 +156,12 @@ func (s *Server) registerMessageHandlers(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /sessions/{sid}/messages", func(w http.ResponseWriter, r *http.Request) {
 		sid := r.PathValue("sid")
-		if _, ok := s.store.GetSession(sid); !ok {
-			WriteError(w, http.StatusNotFound, "session not found")
+		if _, err := s.store.GetSession(sid); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "session not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		msgs, err := store.ReadSessionMessages(s.cfg.WorkDir, sid)

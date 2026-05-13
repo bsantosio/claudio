@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"claudio/internal/domain"
@@ -21,7 +20,6 @@ import (
 type Store struct {
 	db      *sql.DB
 	Mutexes *domain.SessionMutexMap
-	cache   sync.Map
 }
 
 func NewStore(dbPath string) (*Store, error) {
@@ -32,6 +30,10 @@ func NewStore(dbPath string) (*Store, error) {
 	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys=ON;"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 	s := &Store{db: db, Mutexes: domain.NewSessionMutexMap()}
 	if err := s.migrate(); err != nil {
@@ -164,18 +166,18 @@ func (s *Store) CreateAgent(input domain.Agent, defaultModel string) (*domain.Ag
 	}, nil
 }
 
-func (s *Store) GetAgent(id string) (*domain.Agent, bool) {
+func (s *Store) GetAgent(id string) (*domain.Agent, error) {
 	row := s.db.QueryRow(
 		`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, sub_agents, created_at, updated_at
 		 FROM agents WHERE id = ?`, id)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("get agent: %w", err)
 	}
-	return a, true
+	return a, nil
 }
 
 func (s *Store) ListAgents() ([]*domain.Agent, error) {
@@ -379,30 +381,18 @@ func (s *Store) CreateSession(agentID, name string) (*domain.Session, error) {
 	return sess, nil
 }
 
-func (s *Store) GetSession(id string) (*domain.Session, bool) {
+func (s *Store) GetSession(id string) (*domain.Session, error) {
 	row := s.db.QueryRow(
 		`SELECT id, agent_id, name, turn_count, created_at, last_active FROM sessions WHERE id = ?`, id)
 	var sess domain.Session
 	err := row.Scan(&sess.ID, &sess.AgentID, &sess.Name, &sess.TurnCount, &sess.CreatedAt, &sess.LastActive)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("get session: %w", err)
 	}
-	return s.getOrCacheSession(&sess), true
-}
-
-func (s *Store) getOrCacheSession(freshFromDB *domain.Session) *domain.Session {
-	actual, loaded := s.cache.LoadOrStore(freshFromDB.ID, freshFromDB)
-	if !loaded {
-		return freshFromDB
-	}
-	canonical := actual.(*domain.Session)
-	canonical.TurnCount = freshFromDB.TurnCount
-	canonical.LastActive = freshFromDB.LastActive
-	canonical.Name = freshFromDB.Name
-	return canonical
+	return &sess, nil
 }
 
 func (s *Store) ListSessionsByAgent(agentID string) ([]*domain.Session, error) {
@@ -419,7 +409,7 @@ func (s *Store) ListSessionsByAgent(agentID string) ([]*domain.Session, error) {
 		if err := rows.Scan(&sess.ID, &sess.AgentID, &sess.Name, &sess.TurnCount, &sess.CreatedAt, &sess.LastActive); err != nil {
 			return nil, fmt.Errorf("scan session: %w", err)
 		}
-		result = append(result, s.getOrCacheSession(&sess))
+		result = append(result, &sess)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate sessions: %w", err)
@@ -431,12 +421,11 @@ func (s *Store) ListSessionsByAgent(agentID string) ([]*domain.Session, error) {
 }
 
 func (s *Store) DeleteSession(id string) error {
-	// Check mutex outside transaction (mutex is in-memory, not DB)
 	mu := s.Mutexes.Get(id)
 	if !mu.TryLock() {
 		return domain.ErrSessionBusy
 	}
-	mu.Unlock()
+	defer mu.Unlock()
 
 	err := s.withTx(func(tx *sql.Tx) error {
 		var exists bool
@@ -454,7 +443,6 @@ func (s *Store) DeleteSession(id string) error {
 	if err != nil {
 		return err
 	}
-	s.cache.Delete(id)
 	s.Mutexes.Delete(id)
 	return nil
 }

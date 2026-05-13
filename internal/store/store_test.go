@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -126,9 +127,9 @@ func TestStore_CreateAgent_WithSubAgents(t *testing.T) {
 	}
 
 	// Verify sub_agents persists through GetAgent
-	got, ok := s.GetAgent(a.ID)
-	if !ok {
-		t.Fatal("GetAgent returned false")
+	got, err := s.GetAgent(a.ID)
+	if err != nil {
+		t.Fatalf("GetAgent: %v", err)
 	}
 	if len(got.SubAgents) != 2 {
 		t.Errorf("expected 2 sub-agents from GetAgent, got %d", len(got.SubAgents))
@@ -148,7 +149,10 @@ func TestStore_UpdateAgent_SubAgents(t *testing.T) {
 	if len(updated.SubAgents) != 1 || updated.SubAgents[0] != "helper" {
 		t.Errorf("expected sub-agents [helper] after update, got %v", updated.SubAgents)
 	}
-	got, _ := s.GetAgent(a.ID)
+	got, err := s.GetAgent(a.ID)
+	if err != nil {
+		t.Fatalf("GetAgent: %v", err)
+	}
 	if len(got.SubAgents) != 1 || got.SubAgents[0] != "helper" {
 		t.Errorf("expected persisted sub-agents [helper], got %v", got.SubAgents)
 	}
@@ -156,18 +160,18 @@ func TestStore_UpdateAgent_SubAgents(t *testing.T) {
 
 func TestStore_GetAgent_NotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, ok := s.GetAgent("nonexistent")
-	if ok {
-		t.Error("expected GetAgent to return false for nonexistent ID")
+	_, err := s.GetAgent("nonexistent")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
 func TestStore_GetAgent_Found(t *testing.T) {
 	s := newTestStore(t)
 	created, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
-	got, ok := s.GetAgent(created.ID)
-	if !ok {
-		t.Fatal("expected GetAgent to return true")
+	got, err := s.GetAgent(created.ID)
+	if err != nil {
+		t.Fatalf("expected GetAgent to succeed, got %v", err)
 	}
 	if got.ID != created.ID {
 		t.Errorf("expected ID %q, got %q", created.ID, got.ID)
@@ -235,9 +239,9 @@ func TestStore_DeleteAgent_NoSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteAgent: %v", err)
 	}
-	_, ok := s.GetAgent(a.ID)
-	if ok {
-		t.Error("expected agent to be gone after delete")
+	_, err = s.GetAgent(a.ID)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 }
 
@@ -277,9 +281,9 @@ func TestStore_CreateSession_Valid(t *testing.T) {
 
 func TestStore_GetSession_NotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, ok := s.GetSession("nonexistent")
-	if ok {
-		t.Error("expected GetSession to return false for nonexistent ID")
+	_, err := s.GetSession("nonexistent")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
@@ -287,9 +291,9 @@ func TestStore_GetSession_Found(t *testing.T) {
 	s := newTestStore(t)
 	a, _ := s.CreateAgent(domain.Agent{Name: "n", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
 	created, _ := s.CreateSession(a.ID, "s1")
-	got, ok := s.GetSession(created.ID)
-	if !ok {
-		t.Fatal("expected GetSession to return true")
+	got, err := s.GetSession(created.ID)
+	if err != nil {
+		t.Fatalf("expected GetSession to succeed, got %v", err)
 	}
 	if got.ID != created.ID {
 		t.Errorf("expected ID %q, got %q", created.ID, got.ID)
@@ -325,9 +329,9 @@ func TestStore_DeleteSession_Idle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
-	_, ok := s.GetSession(sess.ID)
-	if ok {
-		t.Error("expected session to be gone after delete")
+	_, err = s.GetSession(sess.ID)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 }
 
@@ -357,9 +361,9 @@ func TestStore_SaveSession_UpdatesTurnCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveSession: %v", err)
 	}
-	fresh, ok := s.GetSession(sess.ID)
-	if !ok {
-		t.Fatal("session not found after save")
+	fresh, err := s.GetSession(sess.ID)
+	if err != nil {
+		t.Fatalf("session not found after save: %v", err)
 	}
 	if fresh.TurnCount != 3 {
 		t.Errorf("expected TurnCount 3, got %d", fresh.TurnCount)

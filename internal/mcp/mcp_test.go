@@ -309,8 +309,8 @@ func TestMCP_ToolsCall_DeleteAgent_Success(t *testing.T) {
 	if !strings.Contains(content, "deleted") {
 		t.Errorf("expected 'deleted' in content, got: %s", content)
 	}
-	_, ok := st.GetAgent(created.ID)
-	if ok {
+	_, err := st.GetAgent(created.ID)
+	if err == nil {
 		t.Error("expected agent to be deleted from store")
 	}
 }

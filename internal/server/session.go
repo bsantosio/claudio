@@ -11,8 +11,12 @@ import (
 func (s *Server) registerSessionHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("POST /agents/{aid}/sessions", func(w http.ResponseWriter, r *http.Request) {
 		aid := r.PathValue("aid")
-		if _, ok := s.store.GetAgent(aid); !ok {
-			WriteError(w, http.StatusNotFound, "agent not found")
+		if _, err := s.store.GetAgent(aid); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "agent not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		var input struct {
@@ -32,8 +36,12 @@ func (s *Server) registerSessionHandlers(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /agents/{aid}/sessions", func(w http.ResponseWriter, r *http.Request) {
 		aid := r.PathValue("aid")
-		if _, ok := s.store.GetAgent(aid); !ok {
-			WriteError(w, http.StatusNotFound, "agent not found")
+		if _, err := s.store.GetAgent(aid); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "agent not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		list, err := s.store.ListSessionsByAgent(aid)
@@ -46,9 +54,13 @@ func (s *Server) registerSessionHandlers(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {
 		sid := r.PathValue("sid")
-		sess, ok := s.store.GetSession(sid)
-		if !ok {
-			WriteError(w, http.StatusNotFound, "session not found")
+		sess, err := s.store.GetSession(sid)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "session not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		WriteJSON(w, http.StatusOK, sess)

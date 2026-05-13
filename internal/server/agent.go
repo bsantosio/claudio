@@ -36,9 +36,13 @@ func (s *Server) registerAgentHandlers(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /agents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		a, ok := s.store.GetAgent(id)
-		if !ok {
-			WriteError(w, http.StatusNotFound, "agent not found")
+		a, err := s.store.GetAgent(id)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "agent not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		WriteJSON(w, http.StatusOK, a)
@@ -130,9 +134,13 @@ func (s *Server) registerAgentHandlers(mux *http.ServeMux) {
 	// Task 2.3 — Install agent: copies definition to .claude/agents/.
 	mux.HandleFunc("POST /agents/{id}/install", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		a, ok := s.store.GetAgent(id)
-		if !ok {
-			WriteError(w, http.StatusNotFound, "agent not found")
+		a, err := s.store.GetAgent(id)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "agent not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		if err := domain.InstallAgent(a, s.cfg.WorkDir); err != nil {
@@ -145,9 +153,13 @@ func (s *Server) registerAgentHandlers(mux *http.ServeMux) {
 	// Task 2.4 — Uninstall agent: removes definition from .claude/agents/.
 	mux.HandleFunc("DELETE /agents/{id}/install", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		a, ok := s.store.GetAgent(id)
-		if !ok {
-			WriteError(w, http.StatusNotFound, "agent not found")
+		a, err := s.store.GetAgent(id)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				WriteError(w, http.StatusNotFound, "agent not found")
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		if err := domain.UninstallAgent(a, s.cfg.WorkDir); err != nil {
