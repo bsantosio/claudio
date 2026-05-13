@@ -7,31 +7,34 @@
   <link rel="stylesheet" href="/web/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#app">Skip to main content</a>
+
   <!-- API key modal — shown when no key is stored -->
-  <div id="key-modal" class="modal hidden">
+  <div id="key-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="key-modal-title">
     <div class="modal-box">
-      <h2>API Key Required</h2>
+      <h2 id="key-modal-title">API Key Required</h2>
       <p>Enter your claudio API key to continue.</p>
+      <label for="key-input" class="sr-only">API key</label>
       <input id="key-input" type="password" placeholder="Bearer token…" autocomplete="off" />
       <button id="key-save">Save</button>
     </div>
   </div>
 
-  <header>
-    <span class="logo">claudio</span>
-    <nav>
+  <header role="banner">
+    <span class="logo" aria-label="claudio">claudio</span>
+    <nav aria-label="Main navigation">
       <a href="#quickchat">Chat</a>
       <a href="#agents">Agents</a>
       <a href="#templates">Templates</a>
       <a href="#prompt">Prompt</a>
       <a href="#docs">API Docs</a>
     </nav>
-    <button id="key-btn" title="Set API key">key</button>
+    <button id="key-btn" aria-label="Set API key">key</button>
   </header>
 
-  <div id="health-banner" class="health-banner hidden"></div>
+  <div id="health-banner" class="health-banner hidden" role="status" aria-live="polite"></div>
 
-  <main id="app">
+  <main id="app" aria-label="Claudio Agent Manager">
     <!-- screens are rendered here by app.js -->
   </main>
 

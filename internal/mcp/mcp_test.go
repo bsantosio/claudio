@@ -597,3 +597,147 @@ func TestMCP_RunMCPServerWithRunner_UsesInjectedRunner(t *testing.T) {
 		t.Errorf("expected injected runner response in output, got: %s", buf.String())
 	}
 }
+
+// --- Profile resolution tests ---
+
+func TestResolveTools_Agent(t *testing.T) {
+	tools := mcp.ResolveTools("agent")
+	if !tools["send_message"] {
+		t.Error("agent profile should include send_message")
+	}
+	if tools["delete_agent"] {
+		t.Error("agent profile should not include delete_agent")
+	}
+}
+
+func TestResolveTools_Admin(t *testing.T) {
+	tools := mcp.ResolveTools("admin")
+	if !tools["delete_agent"] {
+		t.Error("admin profile should include delete_agent")
+	}
+	if tools["send_message"] {
+		t.Error("admin profile should not include send_message")
+	}
+}
+
+func TestResolveTools_Combined(t *testing.T) {
+	tools := mcp.ResolveTools("agent,admin")
+	if !tools["send_message"] || !tools["delete_agent"] {
+		t.Error("combined profile should include both send_message and delete_agent")
+	}
+}
+
+func TestResolveTools_All(t *testing.T) {
+	tools := mcp.ResolveTools("all")
+	if tools != nil {
+		t.Error("'all' should return nil (no filtering)")
+	}
+}
+
+func TestResolveTools_Empty(t *testing.T) {
+	tools := mcp.ResolveTools("")
+	if tools != nil {
+		t.Error("empty should return nil (no filtering)")
+	}
+}
+
+func TestResolveTools_IndividualToolName(t *testing.T) {
+	tools := mcp.ResolveTools("send_message")
+	if !tools["send_message"] {
+		t.Error("individual tool name should be in the allowlist")
+	}
+	if tools["create_agent"] {
+		t.Error("unlisted tool should not be in the allowlist")
+	}
+}
+
+// --- MCPServer profile filtering tests ---
+
+func TestMCPServer_AgentProfile_FiltersTools(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	srv := mcp.NewMCPServer(cfg, st, nil, mcp.ProfileAgent)
+	req := mcpRequest("tools/list", nil)
+	resp := srv.HandleRequest(req)
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("unexpected failure: %+v", resp)
+	}
+	result, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	tools, ok := result["tools"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected tools slice, got %T", result["tools"])
+	}
+	nameSet := make(map[string]bool)
+	for _, tool := range tools {
+		name, _ := tool["name"].(string)
+		nameSet[name] = true
+	}
+	agentTools := []string{
+		"create_agent", "list_agents", "get_agent",
+		"create_session", "list_sessions", "send_message",
+		"get_messages", "list_templates", "generate_agent",
+	}
+	for _, name := range agentTools {
+		if !nameSet[name] {
+			t.Errorf("agent profile should include %s", name)
+		}
+	}
+	adminTools := []string{"delete_agent", "delete_session", "install_agent", "uninstall_agent"}
+	for _, name := range adminTools {
+		if nameSet[name] {
+			t.Errorf("agent profile should not include %s", name)
+		}
+	}
+}
+
+func TestMCPServer_AgentProfile_BlocksAdminTool(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	srv := mcp.NewMCPServer(cfg, st, nil, mcp.ProfileAgent)
+	created, _ := st.CreateAgent(domain.Agent{Name: "a", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "delete_agent",
+		"arguments": map[string]any{"agent_id": created.ID},
+	})
+	resp := srv.HandleRequest(req)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if !isToolError(resp.Result) {
+		t.Error("expected isError: true when calling delete_agent with agent profile")
+	}
+}
+
+func TestMCPServer_AdminProfile_AllowsAdminTool(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	srv := mcp.NewMCPServer(cfg, st, nil, mcp.ProfileAdmin)
+	created, _ := st.CreateAgent(domain.Agent{Name: "a", SystemPrompt: "sp", Model: "sonnet"}, "sonnet")
+	req := mcpRequest("tools/call", map[string]any{
+		"name":      "delete_agent",
+		"arguments": map[string]any{"agent_id": created.ID},
+	})
+	resp := srv.HandleRequest(req)
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("unexpected failure: %+v", resp)
+	}
+	if isToolError(resp.Result) {
+		t.Error("expected success when calling delete_agent with admin profile")
+	}
+}
+
+func TestMCPServer_AllProfile_ExposesAllTools(t *testing.T) {
+	st := newMCPStore(t)
+	cfg := domain.Config{DefaultModel: "sonnet"}
+	srv := mcp.NewMCPServer(cfg, st, nil, mcp.ProfileAll)
+	req := mcpRequest("tools/list", nil)
+	resp := srv.HandleRequest(req)
+	result, _ := resp.Result.(map[string]any)
+	tools, _ := result["tools"].([]map[string]any)
+	if len(tools) != 13 {
+		t.Errorf("expected 13 tools with 'all' profile, got %d", len(tools))
+	}
+}

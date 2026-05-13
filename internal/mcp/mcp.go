@@ -68,6 +68,140 @@ const (
 	rpcMethodNotFound = -32601
 )
 
+const (
+	ProfileAgent = "agent"
+	ProfileAdmin = "admin"
+	ProfileAll   = "all"
+)
+
+var profileTools = map[string]map[string]bool{
+	ProfileAgent: {
+		"create_agent":   true,
+		"list_agents":    true,
+		"get_agent":      true,
+		"create_session": true,
+		"list_sessions":  true,
+		"send_message":   true,
+		"get_messages":   true,
+		"list_templates": true,
+		"generate_agent": true,
+	},
+	ProfileAdmin: {
+		"delete_agent":    true,
+		"delete_session":  true,
+		"install_agent":   true,
+		"uninstall_agent": true,
+	},
+}
+
+// ResolveTools converts a profile string into an allowlist map. Input may be
+// a comma-separated list of profile names (agent, admin, all) and/or
+// individual tool names. Returns nil when all tools should be exposed.
+func ResolveTools(input string) map[string]bool {
+	if input == "" || input == ProfileAll {
+		return nil // nil means all tools
+	}
+	result := map[string]bool{}
+	for _, profile := range strings.Split(input, ",") {
+		profile = strings.TrimSpace(profile)
+		if tools, ok := profileTools[profile]; ok {
+			for tool := range tools {
+				result[tool] = true
+			}
+		} else {
+			// Treat as individual tool name
+			result[profile] = true
+		}
+	}
+	return result
+}
+
+// MCPServer holds the configuration and dependencies for an MCP server
+// instance, including an optional tool allowlist derived from a profile string.
+type MCPServer struct {
+	cfg          domain.Config
+	store        *store.Store
+	runner       claude.Runner
+	toolsAllowed map[string]bool
+}
+
+// NewMCPServer creates an MCPServer with the given config, store, runner, and
+// tool profile. A nil runner falls back to claude.RunClaude at call time.
+func NewMCPServer(cfg domain.Config, st *store.Store, runner claude.Runner, toolsProfile string) *MCPServer {
+	if runner == nil {
+		runner = claude.RunClaude
+	}
+	return &MCPServer{
+		cfg:          cfg,
+		store:        st,
+		runner:       runner,
+		toolsAllowed: ResolveTools(toolsProfile),
+	}
+}
+
+// HandleRequest dispatches a single JSON-RPC request and returns the response.
+func (srv *MCPServer) HandleRequest(req JSONRPCRequest) *JSONRPCResponse {
+	if req.ID == nil && req.Method != "" {
+		handleNotification(req)
+		return nil
+	}
+	resp := &JSONRPCResponse{JSONRPC: "2.0", ID: req.ID}
+	switch req.Method {
+	case "initialize":
+		resp.Result = map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo": map[string]any{
+				"name":        "claudio",
+				"version":     domain.Version,
+				"description": "Claude CLI proxy with agent management. Commands: `claudio` (TUI), `claudio web` (HTTP + web UI on port 18080), `claudio mcp` (MCP server, stdio), `claudio prompt` (AI usage prompt). Create named agents with custom system prompts and tools, open persistent sessions, chat with streaming. Install: brew install bsantosio/tap/claudio",
+			},
+		}
+	case "tools/list":
+		resp.Result = map[string]any{"tools": mcpTools(srv.toolsAllowed)}
+	case "tools/call":
+		resp.Result = srv.handleToolsCall(req)
+	default:
+		resp.Error = &RPCError{Code: rpcMethodNotFound, Message: "method not found: " + req.Method}
+	}
+	return resp
+}
+
+// Run reads JSON-RPC requests line-by-line from r, dispatches them, and writes
+// responses to w.
+func (srv *MCPServer) Run(r io.Reader, w io.Writer) error {
+	scanner := bufio.NewScanner(r)
+	buf := make([]byte, 10*1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var req JSONRPCRequest
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			resp := &JSONRPCResponse{
+				JSONRPC: "2.0",
+				Error:   &RPCError{Code: rpcParseError, Message: "parse error: " + err.Error()},
+			}
+			data, _ := json.Marshal(resp)
+			fmt.Fprintln(w, string(data))
+			continue
+		}
+		resp := srv.HandleRequest(req)
+		if resp == nil {
+			continue
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("mcp: marshal error: %v", err)
+			continue
+		}
+		fmt.Fprintln(w, string(data))
+	}
+	return scanner.Err()
+}
+
 type mcpTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
@@ -91,7 +225,7 @@ func toolError(msg string) map[string]any {
 	}
 }
 
-func mcpTools() []map[string]any {
+func mcpTools(allowed map[string]bool) []map[string]any {
 	tools := []mcpTool{
 		{
 			Name:        "create_agent",
@@ -122,9 +256,12 @@ func mcpTools() []map[string]any {
 		{Name: "list_templates", Description: "List pre-built agent templates with recommended system prompts, models, and tools. Use this to discover ready-made agents before creating custom ones.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}},
 		{Name: "generate_agent", Description: "Generate an agent configuration using AI. Describe what you want the agent to do in natural language, and Claude will create an optimized agent config with the best system prompt, model, and tools. Review the result before creating.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"description": map[string]any{"type": "string", "description": "Natural language description of what you want the agent to do"}}, "required": []string{"description"}}},
 	}
-	result := make([]map[string]any, len(tools))
-	for i, t := range tools {
-		result[i] = map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.InputSchema}
+	result := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		if allowed != nil && !allowed[t.Name] {
+			continue
+		}
+		result = append(result, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.InputSchema})
 	}
 	return result
 }
@@ -138,30 +275,8 @@ func HandleMCPRequest(req JSONRPCRequest, cfg domain.Config, st *store.Store) *J
 // HandleMCPRequestWithRunner dispatches an MCP JSON-RPC request, passing an
 // explicit runner to tool handlers. A nil runner uses claude.RunClaude.
 func HandleMCPRequestWithRunner(req JSONRPCRequest, cfg domain.Config, st *store.Store, runner claude.Runner) *JSONRPCResponse {
-	if req.ID == nil && req.Method != "" {
-		handleNotification(req)
-		return nil
-	}
-	resp := &JSONRPCResponse{JSONRPC: "2.0", ID: req.ID}
-	switch req.Method {
-	case "initialize":
-		resp.Result = map[string]any{
-			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo": map[string]any{
-				"name":        "claudio",
-				"version":     domain.Version,
-				"description": "Claude CLI proxy with agent management. Commands: `claudio` (TUI), `claudio web` (HTTP + web UI on port 18080), `claudio mcp` (MCP server, stdio), `claudio prompt` (AI usage prompt). Create named agents with custom system prompts and tools, open persistent sessions, chat with streaming. Install: brew install bsantosio/tap/claudio",
-			},
-		}
-	case "tools/list":
-		resp.Result = map[string]any{"tools": mcpTools()}
-	case "tools/call":
-		resp.Result = handleToolsCallWithRunner(req, cfg, st, runner)
-	default:
-		resp.Error = &RPCError{Code: rpcMethodNotFound, Message: "method not found: " + req.Method}
-	}
-	return resp
+	srv := NewMCPServer(cfg, st, runner, "")
+	return srv.HandleRequest(req)
 }
 
 func handleNotification(req JSONRPCRequest) {
@@ -173,7 +288,7 @@ func handleNotification(req JSONRPCRequest) {
 	}
 }
 
-func handleToolsCallWithRunner(req JSONRPCRequest, cfg domain.Config, st *store.Store, runner claude.Runner) map[string]any {
+func (srv *MCPServer) handleToolsCall(req JSONRPCRequest) map[string]any {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -190,33 +305,36 @@ func handleToolsCallWithRunner(req JSONRPCRequest, cfg domain.Config, st *store.
 	if args == nil {
 		args = map[string]any{}
 	}
+	if srv.toolsAllowed != nil && !srv.toolsAllowed[params.Name] {
+		return toolError("tool not available in current profile: " + params.Name)
+	}
 	switch params.Name {
 	case "create_agent":
-		return toolCreateAgent(args, cfg, st)
+		return toolCreateAgent(args, srv.cfg, srv.store)
 	case "list_agents":
-		return toolListAgents(st)
+		return toolListAgents(srv.store)
 	case "get_agent":
-		return toolGetAgent(args, st)
+		return toolGetAgent(args, srv.store)
 	case "delete_agent":
-		return toolDeleteAgent(args, st)
+		return toolDeleteAgent(args, srv.store)
 	case "create_session":
-		return toolCreateSession(args, st)
+		return toolCreateSession(args, srv.store)
 	case "list_sessions":
-		return toolListSessions(args, st)
+		return toolListSessions(args, srv.store)
 	case "send_message":
-		return toolSendMessage(args, cfg, st, runner)
+		return toolSendMessage(args, srv.cfg, srv.store, srv.runner)
 	case "get_messages":
-		return toolGetMessages(args, cfg)
+		return toolGetMessages(args, srv.cfg)
 	case "delete_session":
-		return toolDeleteSession(args, st)
+		return toolDeleteSession(args, srv.store)
 	case "install_agent":
-		return toolInstallAgent(args, cfg, st)
+		return toolInstallAgent(args, srv.cfg, srv.store)
 	case "uninstall_agent":
-		return toolUninstallAgent(args, cfg, st)
+		return toolUninstallAgent(args, srv.cfg, srv.store)
 	case "list_templates":
 		return toolListTemplates()
 	case "generate_agent":
-		return toolGenerateAgent(args, cfg, st, runner)
+		return toolGenerateAgent(args, srv.cfg, srv.store, srv.runner)
 	default:
 		return toolError("unknown tool: " + params.Name)
 	}
@@ -492,34 +610,6 @@ func RunMCPServer(cfg domain.Config, st *store.Store, r io.Reader, w io.Writer) 
 // RunMCPServerWithRunner runs the MCP server with an explicit runner. A nil
 // runner falls back to claude.RunClaude.
 func RunMCPServerWithRunner(cfg domain.Config, st *store.Store, r io.Reader, w io.Writer, runner claude.Runner) error {
-	scanner := bufio.NewScanner(r)
-	buf := make([]byte, 10*1024*1024)
-	scanner.Buffer(buf, 10*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var req JSONRPCRequest
-		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			resp := &JSONRPCResponse{
-				JSONRPC: "2.0",
-				Error:   &RPCError{Code: rpcParseError, Message: "parse error: " + err.Error()},
-			}
-			data, _ := json.Marshal(resp)
-			fmt.Fprintln(w, string(data))
-			continue
-		}
-		resp := HandleMCPRequestWithRunner(req, cfg, st, runner)
-		if resp == nil {
-			continue
-		}
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("mcp: marshal error: %v", err)
-			continue
-		}
-		fmt.Fprintln(w, string(data))
-	}
-	return scanner.Err()
+	srv := NewMCPServer(cfg, st, runner, "")
+	return srv.Run(r, w)
 }

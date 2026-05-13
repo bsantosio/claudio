@@ -103,7 +103,7 @@ async function renderAgentsScreen(container) {
       <h1>Agents</h1>
       <button class="primary" id="btn-new-agent">+ New agent</button>
     </div>
-    <div id="agent-list"><div class="empty">Loading…</div></div>
+    <div id="agent-list" role="list"><div class="empty">Loading…</div></div>
   `;
   document.getElementById('btn-new-agent').onclick = () => navigate('agents/new');
 
@@ -127,16 +127,17 @@ async function renderAgentsScreen(container) {
   agents.forEach(a => {
     const card = document.createElement('div');
     card.className = 'card';
+    card.setAttribute('role', 'listitem');
     card.innerHTML = `
       <div class="card-body">
         <div class="card-title">${esc(a.name)}</div>
         <div class="card-meta">id: ${esc(a.id)} &nbsp;·&nbsp; model: ${esc(a.model)}</div>
       </div>
       <div class="card-actions">
-        <button class="small" data-action="sessions" data-id="${esc(a.id)}">Sessions</button>
-        <button class="small" data-action="install" data-id="${esc(a.id)}" data-name="${esc(a.name)}">Install</button>
-        <button class="small" data-action="uninstall" data-id="${esc(a.id)}" data-name="${esc(a.name)}">Uninstall</button>
-        <button class="small danger" data-action="delete" data-id="${esc(a.id)}">Delete</button>
+        <button class="small" data-action="sessions" data-id="${esc(a.id)}" aria-label="View sessions for ${esc(a.name)}">Sessions</button>
+        <button class="small" data-action="install" data-id="${esc(a.id)}" data-name="${esc(a.name)}" aria-label="Install ${esc(a.name)}">Install</button>
+        <button class="small" data-action="uninstall" data-id="${esc(a.id)}" data-name="${esc(a.name)}" aria-label="Uninstall ${esc(a.name)}">Uninstall</button>
+        <button class="small danger" data-action="delete" data-id="${esc(a.id)}" aria-label="Delete ${esc(a.name)}">Delete</button>
       </div>
     `;
     list.appendChild(card);
@@ -195,12 +196,13 @@ async function renderNewAgentScreen(container) {
       <h2 class="docs-section">Generate with AI</h2>
       <p class="section-desc">Describe what you want the agent to do. Claude will generate the optimal configuration.</p>
       <div class="form-group">
-        <textarea id="gen-desc" rows="3" placeholder="I want an agent that reviews Go code for security vulnerabilities and suggests fixes..."></textarea>
+        <label for="gen-desc" class="sr-only">Agent description</label>
+        <textarea id="gen-desc" rows="3" placeholder="I want an agent that reviews Go code for security vulnerabilities and suggests fixes..." aria-label="Describe the agent you want to create"></textarea>
       </div>
       <div class="form-actions">
         <button class="primary" id="btn-generate">Generate with AI</button>
       </div>
-      <div id="gen-status" style="margin-top:8px"></div>
+      <div id="gen-status" role="status" aria-live="polite" style="margin-top:8px"></div>
     </div>
 
     <div class="divider"></div>
@@ -227,7 +229,7 @@ async function renderNewAgentScreen(container) {
       <button class="primary" id="btn-create-agent">Create</button>
       <button id="btn-cancel-agent">Cancel</button>
     </div>
-    <div id="ag-error" style="color:var(--danger);margin-top:10px;display:none"></div>
+    <div id="ag-error" role="alert" style="color:var(--danger);margin-top:10px;display:none"></div>
   `;
 
   // AI generation
@@ -294,7 +296,7 @@ async function renderSessionsScreen(container, agentId) {
       <h1>Sessions${esc(titleSuffix)}</h1>
       <button class="primary" id="btn-new-session">+ New session</button>
     </div>
-    <div id="session-list"><div class="empty">Loading…</div></div>
+    <div id="session-list" role="list"><div class="empty">Loading…</div></div>
   `;
 
   document.getElementById('btn-new-session').onclick = async () => {
@@ -330,14 +332,16 @@ async function renderSessionsScreen(container, agentId) {
   sessions.forEach(s => {
     const card = document.createElement('div');
     card.className = 'card';
+    card.setAttribute('role', 'listitem');
+    const sessionLabel = esc(s.name || s.id);
     card.innerHTML = `
       <div class="card-body">
-        <div class="card-title">${esc(s.name || s.id)}</div>
+        <div class="card-title">${sessionLabel}</div>
         <div class="card-meta">turns: ${s.turn_count} &nbsp;·&nbsp; last active: ${esc(s.last_active || '—')}</div>
       </div>
       <div class="card-actions">
-        <button class="small" data-action="open" data-id="${esc(s.id)}">Open chat</button>
-        <button class="small danger" data-action="delete" data-id="${esc(s.id)}">Delete</button>
+        <button class="small" data-action="open" data-id="${esc(s.id)}" aria-label="Open chat for ${sessionLabel}">Open chat</button>
+        <button class="small danger" data-action="delete" data-id="${esc(s.id)}" aria-label="Delete session ${sessionLabel}">Delete</button>
       </div>
     `;
     list.appendChild(card);
@@ -367,8 +371,8 @@ async function renderQuickChatScreen(container) {
   container.innerHTML = `
     <div class="screen-header"><h1>Quick Chat</h1></div>
     <p class="section-desc">Pick a model and start chatting — no agent setup needed.</p>
-    <div class="model-grid" id="model-grid"></div>
-    <div id="quickchat-status" style="margin-top:12px"></div>
+    <div class="model-grid" id="model-grid" role="list" aria-label="Available models"></div>
+    <div id="quickchat-status" role="status" aria-live="polite" style="margin-top:12px"></div>
   `;
 
   const models = [
@@ -382,6 +386,8 @@ async function renderQuickChatScreen(container) {
   models.forEach(m => {
     const card = document.createElement('button');
     card.className = 'model-card';
+    card.setAttribute('role', 'listitem');
+    card.setAttribute('aria-label', `${esc(m.label)}: ${esc(m.desc)}`);
     card.innerHTML = `<div class="model-card-title">${esc(m.label)}</div><div class="model-card-desc">${esc(m.desc)}</div>`;
     card.onclick = () => startQuickChat(container, m.id);
     grid.appendChild(card);
@@ -414,12 +420,13 @@ async function startQuickChat(container, model) {
 async function renderChatScreen(container, sessionId) {
   container.innerHTML = `
     <a class="back" href="#agents">← Back</a>
-    <div class="chat-header"></div>
+    <div class="chat-header" aria-live="polite"></div>
     <div class="chat-container">
-      <div id="chat-messages" class="chat-messages"></div>
+      <div id="chat-messages" class="chat-messages" aria-live="polite" aria-label="Chat messages" role="log"></div>
       <div class="chat-input-row">
-        <textarea id="chat-input" placeholder="Type a message… (Shift+Enter for newline, Enter to send)"></textarea>
-        <button class="primary" id="chat-send">Send</button>
+        <label for="chat-input" class="sr-only">Message</label>
+        <textarea id="chat-input" placeholder="Type a message… (Shift+Enter for newline, Enter to send)" aria-label="Message input"></textarea>
+        <button class="primary" id="chat-send" aria-label="Send message">Send</button>
       </div>
     </div>
   `;
@@ -606,7 +613,7 @@ async function renderTemplatesScreen(container) {
   container.innerHTML = `
     <div class="screen-header"><h1>Agent Templates</h1></div>
     <p class="section-desc">Pre-built agent configurations with optimized prompts. Click to install.</p>
-    <div id="template-list"><div class="empty">Loading…</div></div>
+    <div id="template-list" role="list"><div class="empty">Loading…</div></div>
   `;
 
   let templates;
@@ -626,13 +633,14 @@ async function renderTemplatesScreen(container) {
   templates.forEach(t => {
     const card = document.createElement('div');
     card.className = 'card';
+    card.setAttribute('role', 'listitem');
     card.innerHTML = `
       <div class="card-body">
         <div class="card-title">${esc(t.name)}</div>
         <div class="card-meta">${esc(t.description)} · model: ${esc(t.model)}</div>
       </div>
       <div class="card-actions">
-        <button class="primary small" data-action="install-template">Create Agent</button>
+        <button class="primary small" data-action="install-template" aria-label="Create agent from template: ${esc(t.name)}">Create Agent</button>
       </div>
     `;
     card.querySelector('button').onclick = async () => {

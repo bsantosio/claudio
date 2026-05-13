@@ -77,6 +77,20 @@ CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
 	return err
 }
 
+// withTx runs fn inside a database transaction. If fn returns an error, the
+// transaction is rolled back; otherwise it is committed.
+func (s *Store) withTx(fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 // ─── Agent methods ────────────────────────────────────────────────────────────
 
 func (s *Store) CreateAgent(input domain.Agent, defaultModel string) (*domain.Agent, error) {
@@ -176,79 +190,107 @@ func (s *Store) ListAgents() ([]*domain.Agent, error) {
 }
 
 func (s *Store) UpdateAgent(id string, input domain.Agent, defaultModel string) (*domain.Agent, error) {
-	existing, ok := s.GetAgent(id)
-	if !ok {
-		return nil, domain.ErrNotFound
-	}
-	if input.Name != "" {
-		existing.Name = input.Name
-	}
-	if input.SystemPrompt != "" {
-		existing.SystemPrompt = input.SystemPrompt
-	}
-	if input.Model != "" {
-		if !domain.KnownModels[input.Model] {
-			return nil, fmt.Errorf("%w: %s", domain.ErrUnknownModel, input.Model)
+	var result *domain.Agent
+	err := s.withTx(func(tx *sql.Tx) error {
+		// Read within transaction
+		row := tx.QueryRow(
+			`SELECT id, name, system_prompt, model, max_turns, permission_mode, allowed_tools, disallowed_tools, mcp_config, created_at, updated_at
+			 FROM agents WHERE id = ?`, id)
+		existing, err := scanAgent(row)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return domain.ErrNotFound
+			}
+			return fmt.Errorf("get agent: %w", err)
 		}
-		existing.Model = input.Model
-	}
-	if input.AllowedTools != nil {
-		existing.AllowedTools = input.AllowedTools
-	}
-	if input.DisallowedTools != nil {
-		existing.DisallowedTools = input.DisallowedTools
-	}
-	if input.MCPConfig != nil {
-		existing.MCPConfig = input.MCPConfig
-	}
-	if input.MaxTurns != 0 {
-		existing.MaxTurns = input.MaxTurns
-	}
-	if input.PermissionMode != "" {
-		existing.PermissionMode = input.PermissionMode
-	}
-	_ = defaultModel
-	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	allowedJSON, err := json.Marshal(existing.AllowedTools)
+
+		// Apply updates
+		if input.Name != "" {
+			existing.Name = input.Name
+		}
+		if input.SystemPrompt != "" {
+			existing.SystemPrompt = input.SystemPrompt
+		}
+		if input.Model != "" {
+			if !domain.KnownModels[input.Model] {
+				return fmt.Errorf("%w: %s", domain.ErrUnknownModel, input.Model)
+			}
+			existing.Model = input.Model
+		}
+		if input.AllowedTools != nil {
+			existing.AllowedTools = input.AllowedTools
+		}
+		if input.DisallowedTools != nil {
+			existing.DisallowedTools = input.DisallowedTools
+		}
+		if input.MCPConfig != nil {
+			existing.MCPConfig = input.MCPConfig
+		}
+		if input.MaxTurns != 0 {
+			existing.MaxTurns = input.MaxTurns
+		}
+		if input.PermissionMode != "" {
+			existing.PermissionMode = input.PermissionMode
+		}
+		existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+
+		allowedJSON, err := json.Marshal(existing.AllowedTools)
+		if err != nil {
+			return fmt.Errorf("marshal allowed_tools: %w", err)
+		}
+		disallowedJSON, err := json.Marshal(existing.DisallowedTools)
+		if err != nil {
+			return fmt.Errorf("marshal disallowed_tools: %w", err)
+		}
+		mcpJSON, err := json.Marshal(existing.MCPConfig)
+		if err != nil {
+			return fmt.Errorf("marshal mcp_config: %w", err)
+		}
+
+		_, err = tx.Exec(
+			`UPDATE agents SET name=?, system_prompt=?, model=?, max_turns=?, permission_mode=?, allowed_tools=?, disallowed_tools=?, mcp_config=?, updated_at=?
+			 WHERE id=?`,
+			existing.Name, existing.SystemPrompt, existing.Model,
+			existing.MaxTurns, existing.PermissionMode,
+			string(allowedJSON), string(disallowedJSON), string(mcpJSON),
+			existing.UpdatedAt, id,
+		)
+		if err != nil {
+			return fmt.Errorf("update agent: %w", err)
+		}
+		result = existing
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal allowed_tools: %w", err)
+		return nil, err
 	}
-	disallowedJSON, err := json.Marshal(existing.DisallowedTools)
-	if err != nil {
-		return nil, fmt.Errorf("marshal disallowed_tools: %w", err)
-	}
-	mcpJSON, err := json.Marshal(existing.MCPConfig)
-	if err != nil {
-		return nil, fmt.Errorf("marshal mcp_config: %w", err)
-	}
-	_, err = s.db.Exec(
-		`UPDATE agents SET name=?, system_prompt=?, model=?, max_turns=?, permission_mode=?, allowed_tools=?, disallowed_tools=?, mcp_config=?, updated_at=?
-		 WHERE id=?`,
-		existing.Name, existing.SystemPrompt, existing.Model,
-		existing.MaxTurns, existing.PermissionMode,
-		string(allowedJSON), string(disallowedJSON), string(mcpJSON),
-		existing.UpdatedAt, id,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("update agent: %w", err)
-	}
-	return existing, nil
+	return result, nil
 }
 
 func (s *Store) DeleteAgent(id string) error {
-	if _, ok := s.GetAgent(id); !ok {
-		return domain.ErrNotFound
-	}
-	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE agent_id = ?`, id).Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check sessions: %w", err)
-	}
-	if count > 0 {
-		return domain.ErrHasActiveSessions
-	}
-	_, err = s.db.Exec(`DELETE FROM agents WHERE id = ?`, id)
-	return err
+	return s.withTx(func(tx *sql.Tx) error {
+		var exists bool
+		err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM agents WHERE id = ?)`, id).Scan(&exists)
+		if err != nil {
+			return fmt.Errorf("check agent: %w", err)
+		}
+		if !exists {
+			return domain.ErrNotFound
+		}
+
+		var count int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE agent_id = ?`, id).Scan(&count); err != nil {
+			return fmt.Errorf("check sessions: %w", err)
+		}
+		if count > 0 {
+			return domain.ErrHasActiveSessions
+		}
+
+		if _, err := tx.Exec(`DELETE FROM agents WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("delete agent: %w", err)
+		}
+		return nil
+	})
 }
 
 type agentScanner interface {
@@ -363,16 +405,26 @@ func (s *Store) ListSessionsByAgent(agentID string) ([]*domain.Session, error) {
 }
 
 func (s *Store) DeleteSession(id string) error {
-	_, ok := s.GetSession(id)
-	if !ok {
-		return domain.ErrNotFound
-	}
+	// Check mutex outside transaction (mutex is in-memory, not DB)
 	mu := s.Mutexes.Get(id)
 	if !mu.TryLock() {
 		return domain.ErrSessionBusy
 	}
 	mu.Unlock()
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
+
+	err := s.withTx(func(tx *sql.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)`, id).Scan(&exists); err != nil {
+			return fmt.Errorf("check session: %w", err)
+		}
+		if !exists {
+			return domain.ErrNotFound
+		}
+		if _, err := tx.Exec(`DELETE FROM sessions WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("delete session: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
