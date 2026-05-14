@@ -90,6 +90,10 @@ func generatePlist(binaryPath, port string) (string, error) {
 		filepath.Join(logs, "claudio.err.log")), nil
 }
 
+func guiDomain() string {
+	return fmt.Sprintf("gui/%d", os.Getuid())
+}
+
 func Install(port string) error {
 	bin, err := findBinary()
 	if err != nil {
@@ -114,9 +118,12 @@ func Install(port string) error {
 		return fmt.Errorf("write plist: %w", err)
 	}
 
-	cmd := exec.Command("launchctl", "load", path)
+	// bootout first in case a previous version is loaded (ignore errors)
+	exec.Command("launchctl", "bootout", guiDomain()+"/"+plistLabel).CombinedOutput()
+
+	cmd := exec.Command("launchctl", "bootstrap", guiDomain(), path)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("launchctl load: %s — %w", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("launchctl bootstrap: %s — %w", strings.TrimSpace(string(out)), err)
 	}
 
 	return nil
@@ -132,8 +139,7 @@ func Uninstall() error {
 		return fmt.Errorf("service not installed")
 	}
 
-	cmd := exec.Command("launchctl", "unload", path)
-	cmd.CombinedOutput()
+	exec.Command("launchctl", "bootout", guiDomain()+"/"+plistLabel).CombinedOutput()
 
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("remove plist: %w", err)
